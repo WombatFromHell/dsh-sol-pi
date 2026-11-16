@@ -123,7 +123,7 @@ export function registerOnlineContextCompact(ctx: DshContext, configOf: () => On
 	const states = new Map<string, OnlineState>();
 	const keyOf = (agent: DshAgent | undefined) => agent?.id ?? agent?.session?.id ?? "default";
 
-	ctx.on("agent/session-start", ((payload: unknown) => {
+	ctx.on("agent/created", ((payload: unknown) => {
 		const agent = agentFromPayload(payload);
 		if (!agent) return;
 		states.set(keyOf(agent), initialOnlineState());
@@ -137,7 +137,7 @@ export function registerOnlineContextCompact(ctx: DshContext, configOf: () => On
 		if (exec.name !== "todo_write" && exec.name !== "update_plan") return decision;
 		if (result.isError || decision.kind === "block") return decision;
 		const agent = executionAgent(exec);
-		const plan = todosToPlan(exec.args);
+		const plan = todosToPlan(exec.arguments);
 		if (!plan) return decision;
 		const current = states.get(keyOf(agent)) ?? initialOnlineState();
 		const transition = analyzePlanTransition(current.plan, plan);

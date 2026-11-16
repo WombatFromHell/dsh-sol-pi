@@ -8,7 +8,7 @@ export const SOL_DSH_LOCALE_NS = "settings.solDsh" as const;
 /** Chrome strings match @deepseek-ai/dsh-client-ui-settings-plugins. */
 export const zh = {
 	title: "SoL",
-	description: "省上下文、少重复跑工具：动作融合、ObservationPack、证据保留归约、在线压缩。",
+	description: "省上下文、少重复跑工具：动作融合、ObservationPack、证据保留归约。",
 	expand: "展开设置",
 	overridden: "已覆盖",
 	invalidNumber: "请填数字；留空表示使用默认值。",
@@ -23,7 +23,7 @@ export const zh = {
 	readonly: "本部署的设置为只读。",
 	actionFusion: "动作融合",
 	actionFusionHelp:
-		"打开后，编辑或写入文件时必须用 then_run 带上立刻要跑的 format/test/build，结果和文件改动写在同一次观察里，不要再单独开一轮 bash。PTC / Code 模式下模型只看见 run_code，then_run 几乎用不上。",
+		"打开后，编辑或写入文件时必须用 then_run 带上立刻要跑的 format/test/build，结果和文件改动写在同一次观察里，不要再单独开一轮 bash。若别的插件占了 edit/write，soL 会另开 edit_and_run / write_and_run，参数相同加 then_run。PTC / Code 模式下模型只看见 run_code，then_run 几乎用不上。",
 	observationPack: "ObservationPack",
 	observationPackHelp:
 		"立即模式只把测试/构建这类命令转储落盘成预览；read、grep、git diff/show、知识页保持全文。需要转储全文时用 read / grep，不要发明 obs_recall。",
@@ -64,7 +64,7 @@ export const zh = {
 	reducerCatalogLoading: "正在加载模型目录…",
 	reducerCatalogEmpty: "暂无可用模型；仍可跟随当前 Agent。",
 	occ: "在线上下文压缩",
-	occHelp: "挂在官方 ctx.compaction 上的策略，不是第二套压缩引擎。用来决定何时压、压多少、留多少近期内容。",
+	occHelp: "默认关闭，DSH 0.2.2 上尚未接线（官方 dsh-vcc 已经在做压缩）；打开只会记录一条警告。下面的数值为后续接线保留。",
 	cacheWriteReadRatio: "缓存写/读比",
 	cacheWriteReadRatioHelp:
 		"衡量「新写入缓存」相对「命中已有缓存」的比例。DeepSeek Flash 峰值大约 50，V4 Pro 大约 30；偏高说明缓存不划算，更该压缩。",
@@ -82,7 +82,7 @@ export const zh = {
 
 export const en = {
 	title: "SoL",
-	description: "Save context and avoid redo: action fusion, ObservationPack, evidence-preserving reduction, online compaction.",
+	description: "Save context and avoid redo: action fusion, ObservationPack, evidence-preserving reduction.",
 	expand: "Show settings",
 	overridden: "Overridden",
 	invalidNumber: "Enter a number, or leave blank to use the default.",
@@ -97,7 +97,7 @@ export const en = {
 	readonly: "This deployment stores settings read-only.",
 	actionFusion: "Action fusion",
 	actionFusionHelp:
-		"When on, edit/write MUST pass then_run for the immediate format/test/build so it shares one observation — do not follow with a separate bash turn. Under PTC / Code mode the model only sees run_code, so then_run is almost unused.",
+		"When on, edit/write MUST pass then_run for the immediate format/test/build so it shares one observation — do not follow with a separate bash turn. If another plugin owns edit/write, sol-pi adds edit_and_run / write_and_run with the same arguments plus then_run. Under PTC / Code mode the model only sees run_code, so then_run is almost unused.",
 	observationPack: "ObservationPack",
 	observationPackHelp:
 		"Immediate mode previews only test/build dumps. read, grep, git diff/show, and knowledge pages stay in full. Fetch a dump with read/grep — do not invent obs_recall.",
@@ -137,7 +137,7 @@ export const en = {
 	reducerCatalogLoading: "Loading model catalog…",
 	reducerCatalogEmpty: "No models available; you can still follow the current agent.",
 	occ: "Online context compact",
-	occHelp: "A policy on the host ctx.compaction — not a second engine. Controls when to compact, how far to look, and how much recent context to keep.",
+	occHelp: "Off by default and not wired on DSH 0.2.2 (dsh-vcc already compacts); enabling it only logs a warning. The numbers below are kept for a future port.",
 	cacheWriteReadRatio: "Cache write/read ratio",
 	cacheWriteReadRatioHelp:
 		"New cache writes versus cache hits. DeepSeek Flash peaks near 50, V4 Pro near 30; higher means caching is less worthwhile and compaction helps more.",

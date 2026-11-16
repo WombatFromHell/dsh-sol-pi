@@ -24,6 +24,16 @@
 <details>
 <summary>Changelog</summary>
 
+### [0.2.9] — 2026-11-16
+
+- **DSH 0.2.2 host API:** `ToolExecution.arguments` / `callId`, batch `ctx.tools.execute`, the new `ctx.spillStore.saveText` shape, `Session.header.cwd`, `usage` chunks, `agent/created`, and DSH `bash`'s required `description` + `timeoutMs`.
+- **Action Fusion no longer contests a peer plugin's `edit`/`write`:** literal contracts keep the name, foreign (hashline) contracts get sol-pi's own `edit_and_run` / `write_and_run`.
+- **Online Context Compact is off by default** — not wired on DSH 0.2.2 (`dsh-vcc` already compacts).
+
+### [0.2.8] — 2026-09-29
+
+- **Compatibility (DSH 0.2.0-rc.1):** Update peerDependencies `@deepseek-ai/dsh-settings` to `^0.2.0-rc.1` and `dsh.engines.dsh` to `>=0.2.0-rc.1` to satisfy DSH 0.2.0-rc.1 preflight validation.
+
 ### [0.2.7] — 2026-09-24
 
 - Fix Settings Save/Discard for numeric fields (dirty ignored pending `texts`); add footer button hover/active styles.
@@ -37,10 +47,6 @@
 - Synced Action Fusion Unicode-space + Windows shell path normalization from upstream into `sol-core`.
 - arXiv paper link in READMEs.
 - Pi `stringConfigValue` / preflight now trim reducer route identifiers.
-
-### [0.2.8] — 2026-09-29
-
-- **Compatibility (DSH 0.2.0-rc.1):** Update peerDependencies `@deepseek-ai/dsh-settings` to `^0.2.0-rc.1` and `dsh.engines.dsh` to `>=0.2.0-rc.1` to satisfy DSH 0.2.0-rc.1 preflight validation.
 
 ### [0.2.1] — 2026-09-24
 
@@ -73,12 +79,12 @@ Then open **Settings → 插件**. Language follows **Settings → 通用设置 
 
 | Area | Mechanism | On DSH |
 |---|---|---|
-| Tools | **Action Fusion** | `edit` / `write` can take optional `then_run` so a follow-up command shares one observation. |
+| Tools | **Action Fusion** | `edit` / `write` can take optional `then_run` so a follow-up command shares one observation; when a peer plugin owns those names, sol-pi exposes `edit_and_run` / `write_and_run` with the same arguments. |
 | Observations | **ObservationPack** | Large tool results spill to disk and show a preview; retrieve with `read` / `grep`. No `obs_recall`. |
 | Delegation | **Evidence-Preserving Reducer** | Long diagnostic logs may become a verified local receipt (uses the current agent model unless you pin a reducer route). |
-| Context | **Online Context Compact** | Policy on official `ctx.compaction` (`todo_write` boundaries + `compactNow`). **Not** a second compression engine — `dsh-compaction-basic` still owns how compaction runs. |
+| Context | **Online Context Compact** | Policy on official `ctx.compaction` (`todo_write` boundaries + `compactNow`). **Off by default** on DSH 0.2.2 — it overlaps `dsh-vcc` compaction and its host hooks are not ported. |
 
-**Native Function Calling is this plugin's main win.** Under DSH **PTC / Code mode** (`dsh-tools` `mode: ptc`, or a Code agent preset) the model already batches `edit`+`bash` inside one `run_code` program, and inner sub-results never enter the next prompt. `then_run` is then almost unused. What remains is packing an oversized **outer** `run_code` dump and OCC's compaction policy — both overlap DSH spill (50 KB) and `dsh-compaction-basic`. If you live in PTC, this plugin is optional, not a must. Details: [dsh.md](docs/dsh.md#native-vs-ptc).
+**Native Function Calling is this plugin's main win.** Under DSH **PTC / Code mode** (`dsh-tools` `mode: ptc`, or a Code agent preset) the model already batches `edit`+`bash` inside one `run_code` program, and inner sub-results never enter the next prompt. `then_run` is then almost unused. What remains is packing an oversized **outer** `run_code` dump, which overlaps DSH spill (50 KB). If you live in PTC, this plugin is optional, not a must. Details: [dsh.md](docs/dsh.md#native-vs-ptc).
 
 Shared rules on DSH:
 
@@ -89,7 +95,7 @@ Shared rules on DSH:
 
 ## Install
 
-Requirements: Node.js 22.19+, a working `dsh` CLI, profile `web` (or another profile that loads `dsh-base`). Tested on DSH **0.2.0-rc.1**.
+Requirements: Node.js 22.19+, a working `dsh` CLI, profile `web` (or another profile that loads `dsh-base`). Tested on DSH **0.2.2-rc.3** (preflight floor `>=0.2.0-rc.1`).
 
 ### From GitHub (typical)
 
@@ -140,22 +146,22 @@ Defaults after install (no extra config):
 - Action Fusion **on**
 - ObservationPack **on**, `mode: immediate`
 - Evidence-Preserving Reducer **on** (reducer = current agent route)
-- Online Context Compact **on**, `cacheWriteReadRatio: 50` (DeepSeek Flash peak miss/hit; use **30** for V4 Pro)
+- Online Context Compact **off** — DSH 0.2.2 has no request-size meter seam and `dsh-vcc` already compacts; enabling it logs a warning. Its `cacheWriteReadRatio` keys stay at schema defaults for a future port
 
 Example patch:
 
 ```yaml
 - id: dsh-sol-pi
   config:
-    onlineContextCompact:
-      cacheWriteReadRatio: 30
+    observationPack:
+      thresholdBytes: 20480  # pack only larger dumps
     evidencePreservingReducer:
       enabled: false    # logs must not leave the machine
 ```
 
 Full schema and UI rules: **[docs/dsh-configuration.md](docs/dsh-configuration.md)**. Install / status detail: **[docs/dsh.md](docs/dsh.md)**.
 
-Online Context Compact **calls** official compaction; it does **not** replace `dsh-compaction-basic` (`thresholdRatio`, `retainRatio`, `autoCompact`, …). Keep those under their own settings namespace.
+Online Context Compact would **call** official compaction, not replace `dsh-compaction-basic` (`thresholdRatio`, `retainRatio`, `autoCompact`, …). On DSH 0.2.2 it is not wired (its request-size meter seam is missing and `dsh-vcc` already compacts), so `enabled: true` only logs a warning. Keep `dsh-compaction-basic` under its own settings namespace.
 
 ## Confirm it is active
 
@@ -197,9 +203,9 @@ This checkout still includes the original Pi extension under `src/sol-pi/`. On P
 
 ## Project status
 
-- **DSH:** Cordis plugin `dsh-sol-pi`, Web settings card, tested on **0.2.0-rc.1**.
+- **DSH:** Cordis plugin `dsh-sol-pi`, Web settings card, tested on **0.2.2-rc.3**.
 - **Pi:** Opt-in via `sol-pi.json`, defaults all false, tested on **0.84.2**.
-- Known DSH limits: ObservationPack `delayed` only archives (no silent projection hook); OCC uses `todo_write` boundaries rather than Pi’s `update_plan`.
+- Known DSH limits: ObservationPack `delayed` only archives (no silent projection hook); Online Context Compact is off by default and unwired on 0.2.2.
 
 We welcome tested, host-compatible PRs. See [CONTRIBUTING.md](CONTRIBUTING.md).
 

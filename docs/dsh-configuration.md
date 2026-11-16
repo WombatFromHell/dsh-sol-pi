@@ -29,11 +29,11 @@ Partial user override (profile `cordis.patch.yml` or `$DSH_HOME/cordis.patch.yml
 ```yaml
 - id: dsh-sol-pi
   config:
-    onlineContextCompact:
-      cacheWriteReadRatio: 30   # DeepSeek V4 Pro miss/hit; other nested fields keep schema defaults
+    observationPack:
+      thresholdBytes: 20480   # positive int; other nested fields keep schema defaults
 ```
 
-A DSH patch replaces the row’s `config` **object** as a whole, then Schemastery fills missing keys. Nested objects work the same: specify only `cacheWriteReadRatio` and `enabled` / other metrics stay at best defaults. Restating a nested object does **not** require listing every sibling mechanism.
+A DSH patch replaces the row’s `config` **object** as a whole, then Schemastery fills missing keys. Nested objects work the same: specify only `thresholdBytes` and `mode` / other metrics stay at best defaults. Restating a nested object does **not** require listing every sibling mechanism.
 
 HMR: changing the patch reloads the plugin; registrations unwind.
 
@@ -80,7 +80,7 @@ If the user’s dshweb is English, SoL’s card is English. If it is 中文, the
 | Action Fusion | **on** | Local, schema-stable for the session, saves a round-trip. **Native Function Calling is the reason this is on.** PTC/Code mode already fuses inside `run_code`; `then_run` is then almost unused. |
 | ObservationPack | **on**, mode `immediate` | Shrink test/build dumps at birth (append-only). Immediate replace is `bash` / fused `edit`/`write` **except** retrieval bash (`git diff/show`, `grep`/`rg`/`find`). `read`, `grep`, and knowledge pages stay inline until native spill. `fullSends: 0`. Evidence stays in `ctx.spillStore` / `read`+`grep`. |
 | Evidence-Preserving Reducer | **on**, reducer = current agent route | Unique SoL value. Fail-open. Diagnostic-command + likely-secret filters. Uses the model the user already configured — not `openai-codex` / `gpt-5.6-luna`. |
-| Online Context Compact | **on**, `cacheWriteReadRatio: 50` | Priced replace. DeepSeek Flash peak cache **miss/hit = 0.30 / 0.006 = 50** ([Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing), checked 2026-09-14). Conservative: prefers not to bust a 50× cache. Window protection still fires. |
+| Online Context Compact | **off** | Overlaps `dsh-vcc` compaction, and DSH 0.2.2 has no request-size meter seam for its economics. Enabling it logs a warning; no hooks attach. `cacheWriteReadRatio: 50` (Flash peak miss/hit = 0.30 / 0.006, [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing), checked 2026-09-14) stands for a future port. |
 
 Installing the plugin enables this profile. Set any `enabled: false` to drop a mechanism without touching the others.
 
@@ -107,7 +107,7 @@ evidencePreservingReducer:
   reducerProvider: ''              # empty ⇒ latest routed agent provider
   reducerModel: ''                 # empty ⇒ latest routed agent model
 onlineContextCompact:
-  enabled: true                    # boolean
+  enabled: false                   # not wired on DSH 0.2.2 — overlaps dsh-vcc compaction
   cacheWriteReadRatio: 50          # finite ≥ 0; 0 ⇒ cache write free vs read
   keepRecentTokens: 0              # 0 ⇒ follow DSH retainRatio (0.16 × window)
   nativeSummaryTokenEstimate: 1000
@@ -158,6 +158,8 @@ Do not invent `obs_recall` on DSH. Retrieval is `read` / `grep` on the spill loc
 
 ### Online Context Compact
 
+Not wired on DSH 0.2.2 (default `enabled: false`): the host exposes no request-size meter for the economics, and `dsh-vcc` already compacts. The keys below are kept for a future port; enabling them logs a warning.
+
 | Key | Best | Effect |
 |---|---|---|
 | `cacheWriteReadRatio` | `50` | `breakevenRequests = writeTokens × max(0, ratio − 1) / savingTokens`. Flash miss/hit = 50. V4 Pro miss/hit = 30 (`1.32 / 0.044`). Off-peak ratios are the same (both sides halve). Non-DeepSeek: measure and set. `0` = no cache-write penalty. |
@@ -167,24 +169,18 @@ Do not invent `obs_recall` on DSH. Retrieval is `read` / `grep` on the spill loc
 | `firstCompactionRequestScale` | `2` | First compact uses a more optimistic remaining-request horizon. |
 | `subsequentCompactionMargin` | `1.5` | Later compacts need 1.5× breakeven remaining requests. |
 
-OCC still does **not** mount a second `CompactionEngine`. These numbers only decide *when* to call `ctx.compaction`.
+OCC would still **not** mount a second `CompactionEngine`; those numbers would only decide *when* to call `ctx.compaction`. On DSH 0.2.2 nothing calls them.
 
 ### Action Fusion
 
 No extra metrics in v1. `enabled` is the only switch. Timeout of `then_run` stays per-call (`then_run.timeout`), same as Pi (no implicit default).
 
-`then_run` is a **native-mode** schema field on `edit`/`write`. Under PTC (`dsh-tools` `mode: ptc`, or a Code agent preset) the model only sees `run_code`, so it cannot pass `then_run`. ObservationPack also skips nested PTC sub-dispatches (`exec.parent`). Leftover PTC value is packing/reducing an oversized **outer** `run_code` result plus OCC policy — see [Native vs PTC](dsh.md#native-vs-ptc). Daily PTC users can turn `actionFusion.enabled` off; it will not change what the model calls.
+`then_run` is a **native-mode** schema field on `edit`/`write`. Under PTC (`dsh-tools` `mode: ptc`, or a Code agent preset) the model only sees `run_code`, so it cannot pass `then_run`. ObservationPack also skips nested PTC sub-dispatches (`exec.parent`). Leftover PTC value is packing/reducing an oversized **outer** `run_code` result — see [Native vs PTC](dsh.md#native-vs-ptc). Daily PTC users can turn `actionFusion.enabled` off; it will not change what the model calls.
 
 ## Suggested overrides
 
 ```yaml
-# Cheaper compaction on DeepSeek V4 Pro (miss/hit = 30)
-- id: dsh-sol-pi
-  config:
-    onlineContextCompact:
-      cacheWriteReadRatio: 30
-
-# Pi-like delayed packing (pays a cache miss after two full sends)
+# Cheaper packing: archive only, no replace at birth
 - id: dsh-sol-pi
   config:
     observationPack:
@@ -196,12 +192,6 @@ No extra metrics in v1. `enabled` is the only switch. Timeout of `then_run` stay
   config:
     evidencePreservingReducer:
       enabled: false
-
-# Provider with no prefix cache (ratio 1 ⇒ incremental cost 0)
-- id: dsh-sol-pi
-  config:
-    onlineContextCompact:
-      cacheWriteReadRatio: 1
 ```
 
 ## What stays with DSH

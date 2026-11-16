@@ -28,11 +28,11 @@ function retrieveHint(path: string, locator: string | undefined): string {
 
 function dumpCommand(exec: ToolExecution): string | undefined {
 	if (exec.name === "bash") {
-		const command = recordValue(exec.args, "command");
+		const command = recordValue(exec.arguments, "command");
 		return typeof command === "string" && command.length > 0 ? command : undefined;
 	}
 	if (exec.name !== "edit" && exec.name !== "write") return undefined;
-	const command = recordValue(recordValue(exec.args, "then_run"), "command");
+	const command = recordValue(recordValue(exec.arguments, "then_run"), "command");
 	return typeof command === "string" && command.length > 0 ? command : undefined;
 }
 
@@ -53,7 +53,7 @@ export async function packObservation(
 	}
 	const observation = createObservationFromText(
 		exec.name,
-		String(exec.id ?? exec.callId ?? exec.token ?? `${exec.name}:${text.length}`),
+		exec.callId,
 		text,
 		solDshRuntimeRoot(agent),
 		config.thresholdBytes,
@@ -61,9 +61,15 @@ export async function packObservation(
 	if (!observation) return undefined;
 	await ensureStored(observation);
 	let locator: string | undefined;
-	if (spill) {
+	const sessionId = agent?.session?.id ?? agent?.id;
+	if (spill && typeof sessionId === "string" && sessionId.length > 0) {
 		try {
-			const saved = await spill.saveText({ text: observation.text, mediaType: "text/plain" });
+			const saved = await spill.saveText({
+				owner: { sessionId },
+				source: { kind: "tool", toolName: exec.name, callId: exec.callId, label: "result" },
+				suggestedName: `${exec.name}-result.txt`,
+				content: observation.text,
+			});
 			locator = saved.locator;
 		} catch {
 			locator = undefined;

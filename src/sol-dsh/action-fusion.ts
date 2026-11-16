@@ -28,7 +28,13 @@ const THEN_RUN_SCHEMA = {
 	required: ["command"],
 } as const;
 
-const FUSED_TOOLS = ["edit", "write"] as const;
+export const FUSED_TOOLS = ["edit", "write"] as const;
+
+/** Argument keys that carry the target file, across literal and hashline contracts. */
+const MUTATION_PATH_KEYS = ["path", "file_path", "filePath", "file"] as const;
+
+/** Contracts sol-pi can pass through untouched: the literal path/content shape, not hashline anchors. */
+const LITERAL_CONTRACT_KEYS = ["path", "file_path", "filePath"] as const;
 
 const THEN_RUN_LEAD =
 	"After a successful mutation, you MUST pass then_run {command, timeout?} to run the immediate format/test/build in the SAME observation. Do not split that follow-up into a later bash turn.";
@@ -45,8 +51,11 @@ export function thenRunFromArgs(args: unknown): ThenRunInput | undefined {
 }
 
 function mutationPath(args: unknown): string | undefined {
-	const path = recordValue(args, "path") ?? recordValue(args, "file_path") ?? recordValue(args, "filePath");
-	return typeof path === "string" && path.length > 0 ? path : undefined;
+	for (const key of MUTATION_PATH_KEYS) {
+		const value = recordValue(args, key);
+		if (typeof value === "string" && value.length > 0) return value;
+	}
+	return undefined;
 }
 
 function withoutThenRun(args: unknown): unknown {
@@ -55,50 +64,85 @@ function withoutThenRun(args: unknown): unknown {
 	return rest;
 }
 
+/** The parameter names a definition declares, in both schema-root and bare-object shapes. */
+function declaredProperties(parameters: Record<string, unknown> | undefined): Record<string, unknown> {
+	if (!parameters) return {};
+	return parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties)
+		? (parameters.properties as Record<string, unknown>)
+		: parameters;
+}
+
 export function extendParameters(parameters: Record<string, unknown>): Record<string, unknown> {
-	const properties =
-		parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties)
-			? (parameters.properties as Record<string, unknown>)
-			: parameters;
-	const usingJsonSchemaRoot = "type" in parameters || "properties" in parameters;
-	if (usingJsonSchemaRoot) {
+	if ("type" in parameters || "properties" in parameters) {
 		return {
 			...parameters,
 			type: "object",
-			properties: { ...properties, then_run: THEN_RUN_SCHEMA },
+			properties: {
+				...declaredProperties(parameters),
+				then_run: THEN_RUN_SCHEMA,
+			},
 		};
 	}
 	return { ...parameters, then_run: THEN_RUN_SCHEMA };
 }
 
 export function hasThenRunParameter(parameters: Record<string, unknown> | undefined): boolean {
-	if (!parameters) return false;
-	const properties =
-		parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties)
-			? (parameters.properties as Record<string, unknown>)
-			: parameters;
-	return Boolean(properties.then_run);
+	return Boolean(declaredProperties(parameters).then_run);
 }
 
-async function runBash(
-	ctx: DshContext,
-	thenRun: ThenRunInput,
-	exec: ToolExecution,
-): Promise<ToolExecutionResult> {
+/** sol-pi passes a payload through untouched only for the literal path/content contract. */
+export function isLiteralMutation(base: ToolDefinition): boolean {
+	const properties = declaredProperties(base.parameters);
+	return LITERAL_CONTRACT_KEYS.some((key) => properties[key] !== undefined);
+}
+
+/** Name sol-pi owns when a peer holds the mutation name under a contract it cannot rewrite. */
+export function delegatingName(name: string): string {
+	return `${name}_and_run`;
+}
+
+async function runBash(ctx: DshContext, thenRun: ThenRunInput, exec: ToolExecution): Promise<ToolExecutionResult> {
 	const args: Record<string, unknown> = { command: thenRun.command };
-	if (thenRun.timeout !== undefined) args.timeout = thenRun.timeout;
-	return ctx.tools.execute({
-		name: "bash",
-		args,
-		caller: exec.caller ?? exec.agent,
-		signal: exec.signal,
+	// DSH's `bash` requires `description` next to `command`; omitting it fails argument validation.
+	args.description = `then_run: ${thenRun.command.slice(0, 60)}`;
+	// DSH's `bash` takes `timeoutMs`; a bare `timeout` passes validation but is ignored.
+	if (thenRun.timeout !== undefined) args.timeoutMs = Math.round(thenRun.timeout * 1000);
+	const batch = await ctx.tools.execute({
+		calls: [
+			{
+				type: "tool-call",
+				id: `${exec.callId}-then-run`,
+				name: "bash",
+				arguments: JSON.stringify(args),
+			},
+		],
+		signal: exec.signal ?? new AbortController().signal,
+		agent: exec.agent,
+		toolSet: exec.toolSet,
 	});
+	return (
+		batch.results[0]?.result ?? {
+			content: [{ type: "text", text: "bash returned no result." }],
+			isError: true,
+		}
+	);
 }
 
-function wrapTool(ctx: DshContext, agent: DshAgent, name: (typeof FUSED_TOOLS)[number], base: ToolDefinition): ToolDefinition {
+/** DSH's `bash` reports a non-zero exit or an expired command in text, never through `isError`. */
+function commandIncomplete(output: string): boolean {
+	// ponytail: text markers only; upgrade if DSH exposes exitCode/background state on tool results.
+	if (output.includes("moved to background job")) return true; // expired: outcome unknown, job id is in the text
+	return [...output.matchAll(/\[exit code: (-?\d+)\]/g)].some((match) => Number(match[1]) !== 0);
+}
+
+function wrapTool(ctx: DshContext, agent: DshAgent, name: string, base: ToolDefinition): ToolDefinition {
+	// A variant under our own name delegates to whatever currently holds the mutation name.
+	const target = name === base.name ? () => base : () => resolveBase(ctx, agent, base.name) ?? base;
 	const extras = new Map<string | symbol, string>();
-	const extraKey = (exec: ToolExecution) => exec.token ?? exec.id ?? exec.callId ?? `${name}:${JSON.stringify(exec.args)}`;
-	const description = base.description.includes("then_run") ? base.description : `${THEN_RUN_LEAD}\n\n${base.description}`;
+	const extraKey = (exec: ToolExecution) => exec.token ?? exec.callId;
+	const lead =
+		name === base.name ? THEN_RUN_LEAD : `${THEN_RUN_LEAD}\n\n${name} takes the same arguments as ${base.name}.`;
+	const description = base.description.includes("then_run") ? base.description : `${lead}\n\n${base.description}`;
 	return {
 		...base,
 		name,
@@ -110,10 +154,10 @@ function wrapTool(ctx: DshContext, agent: DshAgent, name: (typeof FUSED_TOOLS)[n
 			const thenRun = thenRunFromArgs(args);
 			const rest = withoutThenRun(args);
 			const relativePath = mutationPath(args);
-			const absolutePath = relativePath ? resolveToolPath(sessionCwd(agent), relativePath) : undefined;
+			const absolutePath = relativePath ? resolveToolPath(sessionCwd(exec.agent ?? agent), relativePath) : undefined;
 			const work = async () => {
 				try {
-					return await base.execute(rest, exec);
+					return await target().execute(rest, exec);
 				} catch (error) {
 					if (thenRun) throw thenRunSkippedError(error);
 					throw error;
@@ -121,6 +165,13 @@ function wrapTool(ctx: DshContext, agent: DshAgent, name: (typeof FUSED_TOOLS)[n
 			};
 			const value = absolutePath ? await withFusedFileQueue(absolutePath, work) : await work();
 			if (!thenRun) return value;
+			// Under PTC only calls with a parent may run native tools, so a nested `bash`
+			// dispatch from here would be denied as UNKNOWN_TOOL. Skip it; the outer
+			// transport call still runs the command the model asked for.
+			if (exec.parent !== undefined) {
+				extras.set(extraKey(exec), `${THEN_RUN_SKIPPED} transport sub-dispatch; the command was not run.`);
+				return value;
+			}
 			if (!absolutePath) {
 				extras.set(extraKey(exec), `${THEN_RUN_SKIPPED} mutation path is unavailable; the command was not run.`);
 				return value;
@@ -131,7 +182,9 @@ function wrapTool(ctx: DshContext, agent: DshAgent, name: (typeof FUSED_TOOLS)[n
 				const output = textOf(bashResult.content);
 				extras.set(
 					extraKey(exec),
-					bashResult.isError ? formatThenRunFailure(output, new Error(output || "bash failed")) : formatThenRunSuccess(output),
+					bashResult.isError || commandIncomplete(output)
+						? formatThenRunFailure(output, new Error(output || "bash failed"))
+						: formatThenRunSuccess(output),
 				);
 			} catch (error) {
 				extras.set(extraKey(exec), formatThenRunFailure("", error));
@@ -149,41 +202,86 @@ function wrapTool(ctx: DshContext, agent: DshAgent, name: (typeof FUSED_TOOLS)[n
 	};
 }
 
-function resolveBase(ctx: DshContext, agent: DshAgent, name: (typeof FUSED_TOOLS)[number]): ToolDefinition | undefined {
-	return agent.ctx.tools.get(name, agent) ?? agent.ctx.tools.get(name) ?? ctx.tools.get(name, agent) ?? ctx.tools.get(name);
+/** The base is the definition this agent currently sees for the name. */
+function resolveBase(ctx: DshContext, agent: DshAgent, name: string): ToolDefinition | undefined {
+	return agent.ctx.tools.get(name, agent) ?? ctx.tools.get(name);
 }
 
+/**
+ * Fusion registers on the AGENT's own layer: dsh-tools refuses a global
+ * re-registration of a name a preset already provides, and a layer holds one slot
+ * per name. So sol-pi never contests a peer's `edit`/`write`: under a contract it
+ * cannot pass through (hashline anchors) it registers `edit_and_run` / `write_and_run`
+ * under its own name and delegates to the visible definition. Bundle order therefore
+ * decides nothing, and our teardown deletes only our own names. The guidance section
+ * reads visible definitions per assembly scope, so a name without `then_run` is never
+ * advertised.
+ */
 export function attachActionFusion(ctx: DshContext, agent: DshAgent, enabled: () => boolean): void {
 	if (!enabled()) return;
 	const tools = agent.ctx?.tools;
 	if (!tools?.register) return;
-	for (const name of FUSED_TOOLS) {
-		const base = resolveBase(ctx, agent, name);
-		if (!base) continue;
-		if (hasThenRunParameter(base.parameters)) continue;
-		try {
-			tools.register(wrapTool(ctx, agent, name, base));
-		} catch (error) {
-			ctx.logger?.warn?.(
-				`dsh-sol-pi: could not shadow ${name} with then_run on agent ${agent.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`,
-			);
+	// One claim per mutation tool, remembered by the definition WE registered, so a peer that
+	// reclaimed the name keeps its own slot and is never disposed by us.
+	const claims = new Map<string, { definition: ToolDefinition; dispose: () => void }>();
+	const drop = (name: string): void => {
+		const claim = claims.get(name);
+		if (!claim) return;
+		claims.delete(name);
+		if (resolveBase(ctx, agent, name) === claim.definition) claim.dispose();
+	};
+	const sync = (): void => {
+		if (!enabled()) {
+			for (const name of [...claims.keys()]) drop(name);
+			return;
 		}
-	}
+		for (const name of FUSED_TOOLS) {
+			const base = resolveBase(ctx, agent, name);
+			if (!base || hasThenRunParameter(base.parameters)) {
+				drop(name);
+				continue;
+			}
+			const claim = isLiteralMutation(base) ? name : delegatingName(name);
+			if (claims.get(name)?.definition.name === claim) continue;
+			drop(name);
+			const definition = wrapTool(ctx, agent, claim, base);
+			try {
+				claims.set(name, { definition, dispose: tools.register(definition) });
+			} catch (error) {
+				ctx.logger?.warn?.(
+					`dsh-sol-pi: could not register ${claim} with then_run on agent ${agent.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+	};
+	// The claim depends on the contract this agent currently sees, and a peer may register it
+	// synchronously inside `agent/created` after our own pass resolves. dsh-tools emits
+	// `tools/change` on every registry edit, so the claim is re-decided there; our own
+	// registration re-syncs to a no-op. Agent-scope disposal cleans up both; hosts without an
+	// event API keep the single claim made above.
+	sync();
+	agent.ctx.on?.("tools/change", sync as (...args: never[]) => unknown);
 }
 
 export function registerActionFusion(ctx: DshContext, enabled: () => boolean = () => true): void {
+	// The inject pass and `agent/created` can both reach the same agent; claim once.
+	const attached = new WeakSet<object>();
+	const attachOnce = (agent: DshAgent): void => {
+		if (attached.has(agent)) return;
+		attached.add(agent);
+		attachActionFusion(ctx, agent, enabled);
+	};
 	const onAgent = (payload: unknown) => {
 		const agent = agentFromPayload(payload);
-		if (agent) attachActionFusion(ctx, agent, enabled);
+		if (agent) attachOnce(agent);
 	};
 
-	ctx.on("agent/session-start", onAgent as (...args: never[]) => unknown);
 	ctx.on("agent/created", onAgent as (...args: never[]) => unknown);
 
 	if (typeof ctx.inject === "function") {
 		ctx.inject(["agents"], (child) => {
 			try {
-				for (const agent of child.agents?.list?.() ?? []) attachActionFusion(ctx, agent, enabled);
+				for (const agent of child.agents?.list?.() ?? []) attachOnce(agent);
 			} catch (error) {
 				ctx.logger?.warn?.(
 					`dsh-sol-pi: could not wrap live agents: ${error instanceof Error ? error.message : String(error)}`,

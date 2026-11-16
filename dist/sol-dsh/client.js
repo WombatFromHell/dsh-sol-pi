@@ -98,7 +98,8 @@ var SOL_DSH_DEFAULTS = {
     reducerModel: ""
   },
   onlineContextCompact: {
-    enabled: true,
+    // Overlaps dsh-vcc compaction; the DSH host hooks are not ported, so it stays off.
+    enabled: false,
     cacheWriteReadRatio: 50,
     keepRecentTokens: 0,
     nativeSummaryTokenEstimate: 1e3,
@@ -236,7 +237,7 @@ var DEFAULT_SOL_DSH_CONFIG = resolveSolDshConfig({});
 // src/sol-dsh/client/card.tsx
 var import_react = require("react");
 
-// sol-dsh-css:/Users/xing/Projects/github/dsh-sol-pi/src/sol-dsh/client/card.module.css
+// sol-dsh-css:/var/home/josh/Projects/dsh-sol-pi/src/sol-dsh/client/card.module.css
 if (typeof document !== "undefined" && !document.getElementById("sol-dsh-css")) {
   const s = document.createElement("style");
   s.id = "sol-dsh-css";
@@ -1045,7 +1046,7 @@ function SolDshForm(props) {
 var SOL_DSH_LOCALE_NS = "settings.solDsh";
 var zh = {
   title: "SoL",
-  description: "\u7701\u4E0A\u4E0B\u6587\u3001\u5C11\u91CD\u590D\u8DD1\u5DE5\u5177\uFF1A\u52A8\u4F5C\u878D\u5408\u3001ObservationPack\u3001\u8BC1\u636E\u4FDD\u7559\u5F52\u7EA6\u3001\u5728\u7EBF\u538B\u7F29\u3002",
+  description: "\u7701\u4E0A\u4E0B\u6587\u3001\u5C11\u91CD\u590D\u8DD1\u5DE5\u5177\uFF1A\u52A8\u4F5C\u878D\u5408\u3001ObservationPack\u3001\u8BC1\u636E\u4FDD\u7559\u5F52\u7EA6\u3002",
   expand: "\u5C55\u5F00\u8BBE\u7F6E",
   overridden: "\u5DF2\u8986\u76D6",
   invalidNumber: "\u8BF7\u586B\u6570\u5B57\uFF1B\u7559\u7A7A\u8868\u793A\u4F7F\u7528\u9ED8\u8BA4\u503C\u3002",
@@ -1059,7 +1060,7 @@ var zh = {
   conflict: "\u914D\u7F6E\u5DF2\u5728\u522B\u5904\u66F4\u65B0\uFF0C\u4FDD\u5B58\u88AB\u62D2\u7EDD\u3002\u8BF7\u653E\u5F03\u4FEE\u6539\u540E\u91CD\u8BD5\u3002",
   readonly: "\u672C\u90E8\u7F72\u7684\u8BBE\u7F6E\u4E3A\u53EA\u8BFB\u3002",
   actionFusion: "\u52A8\u4F5C\u878D\u5408",
-  actionFusionHelp: "\u6253\u5F00\u540E\uFF0C\u7F16\u8F91\u6216\u5199\u5165\u6587\u4EF6\u65F6\u5FC5\u987B\u7528 then_run \u5E26\u4E0A\u7ACB\u523B\u8981\u8DD1\u7684 format/test/build\uFF0C\u7ED3\u679C\u548C\u6587\u4EF6\u6539\u52A8\u5199\u5728\u540C\u4E00\u6B21\u89C2\u5BDF\u91CC\uFF0C\u4E0D\u8981\u518D\u5355\u72EC\u5F00\u4E00\u8F6E bash\u3002PTC / Code \u6A21\u5F0F\u4E0B\u6A21\u578B\u53EA\u770B\u89C1 run_code\uFF0Cthen_run \u51E0\u4E4E\u7528\u4E0D\u4E0A\u3002",
+  actionFusionHelp: "\u6253\u5F00\u540E\uFF0C\u7F16\u8F91\u6216\u5199\u5165\u6587\u4EF6\u65F6\u5FC5\u987B\u7528 then_run \u5E26\u4E0A\u7ACB\u523B\u8981\u8DD1\u7684 format/test/build\uFF0C\u7ED3\u679C\u548C\u6587\u4EF6\u6539\u52A8\u5199\u5728\u540C\u4E00\u6B21\u89C2\u5BDF\u91CC\uFF0C\u4E0D\u8981\u518D\u5355\u72EC\u5F00\u4E00\u8F6E bash\u3002\u82E5\u522B\u7684\u63D2\u4EF6\u5360\u4E86 edit/write\uFF0CsoL \u4F1A\u53E6\u5F00 edit_and_run / write_and_run\uFF0C\u53C2\u6570\u76F8\u540C\u52A0 then_run\u3002PTC / Code \u6A21\u5F0F\u4E0B\u6A21\u578B\u53EA\u770B\u89C1 run_code\uFF0Cthen_run \u51E0\u4E4E\u7528\u4E0D\u4E0A\u3002",
   observationPack: "ObservationPack",
   observationPackHelp: "\u7ACB\u5373\u6A21\u5F0F\u53EA\u628A\u6D4B\u8BD5/\u6784\u5EFA\u8FD9\u7C7B\u547D\u4EE4\u8F6C\u50A8\u843D\u76D8\u6210\u9884\u89C8\uFF1Bread\u3001grep\u3001git diff/show\u3001\u77E5\u8BC6\u9875\u4FDD\u6301\u5168\u6587\u3002\u9700\u8981\u8F6C\u50A8\u5168\u6587\u65F6\u7528 read / grep\uFF0C\u4E0D\u8981\u53D1\u660E obs_recall\u3002",
   mode: "\u6253\u5305\u65F6\u673A",
@@ -1098,7 +1099,7 @@ var zh = {
   reducerCatalogLoading: "\u6B63\u5728\u52A0\u8F7D\u6A21\u578B\u76EE\u5F55\u2026",
   reducerCatalogEmpty: "\u6682\u65E0\u53EF\u7528\u6A21\u578B\uFF1B\u4ECD\u53EF\u8DDF\u968F\u5F53\u524D Agent\u3002",
   occ: "\u5728\u7EBF\u4E0A\u4E0B\u6587\u538B\u7F29",
-  occHelp: "\u6302\u5728\u5B98\u65B9 ctx.compaction \u4E0A\u7684\u7B56\u7565\uFF0C\u4E0D\u662F\u7B2C\u4E8C\u5957\u538B\u7F29\u5F15\u64CE\u3002\u7528\u6765\u51B3\u5B9A\u4F55\u65F6\u538B\u3001\u538B\u591A\u5C11\u3001\u7559\u591A\u5C11\u8FD1\u671F\u5185\u5BB9\u3002",
+  occHelp: "\u9ED8\u8BA4\u5173\u95ED\uFF0CDSH 0.2.2 \u4E0A\u5C1A\u672A\u63A5\u7EBF\uFF08\u5B98\u65B9 dsh-vcc \u5DF2\u7ECF\u5728\u505A\u538B\u7F29\uFF09\uFF1B\u6253\u5F00\u53EA\u4F1A\u8BB0\u5F55\u4E00\u6761\u8B66\u544A\u3002\u4E0B\u9762\u7684\u6570\u503C\u4E3A\u540E\u7EED\u63A5\u7EBF\u4FDD\u7559\u3002",
   cacheWriteReadRatio: "\u7F13\u5B58\u5199/\u8BFB\u6BD4",
   cacheWriteReadRatioHelp: "\u8861\u91CF\u300C\u65B0\u5199\u5165\u7F13\u5B58\u300D\u76F8\u5BF9\u300C\u547D\u4E2D\u5DF2\u6709\u7F13\u5B58\u300D\u7684\u6BD4\u4F8B\u3002DeepSeek Flash \u5CF0\u503C\u5927\u7EA6 50\uFF0CV4 Pro \u5927\u7EA6 30\uFF1B\u504F\u9AD8\u8BF4\u660E\u7F13\u5B58\u4E0D\u5212\u7B97\uFF0C\u66F4\u8BE5\u538B\u7F29\u3002",
   keepRecentTokens: "\u4FDD\u7559\u8FD1\u671F token",
@@ -1114,7 +1115,7 @@ var zh = {
 };
 var en = {
   title: "SoL",
-  description: "Save context and avoid redo: action fusion, ObservationPack, evidence-preserving reduction, online compaction.",
+  description: "Save context and avoid redo: action fusion, ObservationPack, evidence-preserving reduction.",
   expand: "Show settings",
   overridden: "Overridden",
   invalidNumber: "Enter a number, or leave blank to use the default.",
@@ -1128,7 +1129,7 @@ var en = {
   conflict: "Configuration changed elsewhere; save was rejected. Discard and retry.",
   readonly: "This deployment stores settings read-only.",
   actionFusion: "Action fusion",
-  actionFusionHelp: "When on, edit/write MUST pass then_run for the immediate format/test/build so it shares one observation \u2014 do not follow with a separate bash turn. Under PTC / Code mode the model only sees run_code, so then_run is almost unused.",
+  actionFusionHelp: "When on, edit/write MUST pass then_run for the immediate format/test/build so it shares one observation \u2014 do not follow with a separate bash turn. If another plugin owns edit/write, sol-pi adds edit_and_run / write_and_run with the same arguments plus then_run. Under PTC / Code mode the model only sees run_code, so then_run is almost unused.",
   observationPack: "ObservationPack",
   observationPackHelp: "Immediate mode previews only test/build dumps. read, grep, git diff/show, and knowledge pages stay in full. Fetch a dump with read/grep \u2014 do not invent obs_recall.",
   mode: "Packing timing",
@@ -1167,7 +1168,7 @@ var en = {
   reducerCatalogLoading: "Loading model catalog\u2026",
   reducerCatalogEmpty: "No models available; you can still follow the current agent.",
   occ: "Online context compact",
-  occHelp: "A policy on the host ctx.compaction \u2014 not a second engine. Controls when to compact, how far to look, and how much recent context to keep.",
+  occHelp: "Off by default and not wired on DSH 0.2.2 (dsh-vcc already compacts); enabling it only logs a warning. The numbers below are kept for a future port.",
   cacheWriteReadRatio: "Cache write/read ratio",
   cacheWriteReadRatioHelp: "New cache writes versus cache hits. DeepSeek Flash peaks near 50, V4 Pro near 30; higher means caching is less worthwhile and compaction helps more.",
   keepRecentTokens: "Keep-recent tokens",

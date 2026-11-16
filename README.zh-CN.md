@@ -24,6 +24,16 @@
 <details>
 <summary>更新日志</summary>
 
+### [0.2.9] — 2026-11-16
+
+- **DSH 0.2.2 宿主 API：** `ToolExecution.arguments` / `callId`、批量 `ctx.tools.execute`、新的 `ctx.spillStore.saveText` 参数、`Session.header.cwd`、`usage` 数据块、`agent/created`，以及 DSH `bash` 必需的 `description` 与 `timeoutMs`。
+- **动作融合不再抢占同行插件的 `edit`/`write`：**字面契约保留原名，外来（hashline 锚点）契约改用 sol-pi 自己的 `edit_and_run` / `write_and_run`。
+- **在线上下文压缩默认关闭** — DSH 0.2.2 上未接线（`dsh-vcc` 已经在做压缩）。
+
+### [0.2.8] — 2026-09-29
+
+- **兼容性（DSH 0.2.0-rc.1）：** 更新 peerDependencies `@deepseek-ai/dsh-settings` 为 `^0.2.0-rc.1`，`dsh.engines.dsh` 为 `>=0.2.0-rc.1`，通过 DSH 0.2.0-rc.1 的启动与安装预检机制。
+
 ### [0.2.7] — 2026-09-24
 
 - 修复数字字段改完后「保存/放弃修改」无效（dirty 未计入暂存 `texts`）；底部按钮补齐 hover/active。
@@ -37,10 +47,6 @@
 - 从上游同步 Action Fusion 的 Unicode 空格与 Windows shell 路径归一化到 `sol-core`。
 - README 增加 arXiv 论文链接。
 - Pi 侧 `stringConfigValue` / 预检对归约路由标识做 trim。
-
-### [0.2.8] — 2026-09-29
-
-- **兼容性（DSH 0.2.0-rc.1）：** 更新 peerDependencies `@deepseek-ai/dsh-settings` 为 `^0.2.0-rc.1`，`dsh.engines.dsh` 为 `>=0.2.0-rc.1`，通过 DSH 0.2.0-rc.1 的启动与安装预检机制。
 
 ### [0.2.1] — 2026-09-24
 
@@ -89,7 +95,7 @@ DSH 上的共同约定：
 
 ## 安装
 
-要求：Node.js 22.19+、可用的 `dsh` CLI、`web` profile（或其它加载了 `dsh-base` 的 profile）。已在 DSH **0.2.0-rc.1** 验证。
+要求：Node.js 22.19+、可用的 `dsh` CLI、`web` profile（或其它加载了 `dsh-base` 的 profile）。已在 DSH **0.2.2-rc.3** 验证（预检下限 `>=0.2.0-rc.1`）。
 
 ### 从 GitHub 安装（常用）
 
@@ -197,7 +203,7 @@ npm run build:dsh      # dist/sol-dsh/{index,client}.js
 
 ## 项目状态
 
-- **DSH：** Cordis 插件 `dsh-sol-pi`，带 Web 设置卡，已在 **0.2.0-rc.1** 验证。
+- **DSH：** Cordis 插件 `dsh-sol-pi`，带 Web 设置卡，已在 **0.2.2-rc.3** 验证。
 - **Pi：** 通过 `sol-pi.json` opt-in，默认全关，已在 **0.84.2** 验证。
 - DSH 已知限制：ObservationPack 的 `delayed` 只做归档（无静默投影钩子）；OCC 用 `todo_write` 边界，而不是 Pi 的 `update_plan`。
 

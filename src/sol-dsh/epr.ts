@@ -42,11 +42,11 @@ export type ReductionSkipReason =
 
 export function commandFromExecution(exec: ToolExecution): string | undefined {
 	if (exec.name === "bash") {
-		const command = recordValue(exec.args, "command");
+		const command = recordValue(exec.arguments, "command");
 		return typeof command === "string" && command.length > 0 ? command : undefined;
 	}
 	if (exec.name !== "write" && exec.name !== "edit") return undefined;
-	const thenRun = recordValue(exec.args, "then_run");
+	const thenRun = recordValue(exec.arguments, "then_run");
 	const command = recordValue(thenRun, "command");
 	return typeof command === "string" && command.length > 0 ? command : undefined;
 }
@@ -83,10 +83,10 @@ async function collectStreamText(
 	let usageTokens = 0;
 	for await (const chunk of ctx.llm.stream(options)) {
 		if (chunk.type === "text-delta" && typeof chunk.text === "string") text += chunk.text;
-		else if (chunk.type === "text" && typeof chunk.text === "string") text += chunk.text;
-		else if (typeof chunk.delta === "string") text += chunk.delta;
-		const usage = chunk.usage as { totalTokens?: number } | undefined;
-		if (usage && typeof usage.totalTokens === "number") usageTokens = usage.totalTokens;
+		else if (chunk.type === "usage") {
+			const total = (chunk.usage as { totalTokens?: number } | undefined)?.totalTokens;
+			if (typeof total === "number") usageTokens = total;
+		}
 	}
 	return { text, usageTokens };
 }

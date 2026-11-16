@@ -29,7 +29,8 @@ export function solDshRuntimeRoot(agent: DshAgent | undefined): string {
 	return join(sessionDir(agent), "dsh-sol-pi", sessionId(agent));
 }
 
+/** The session's working directory — DSH keeps it on `Session.header.cwd`, not on the Agent. */
 export function sessionCwd(agent: DshAgent | undefined, fallback = process.cwd()): string {
-	const cwd = agent?.session?.cwd;
+	const cwd = agent?.session?.header?.cwd;
 	return typeof cwd === "string" && cwd.length > 0 ? cwd : fallback;
 }

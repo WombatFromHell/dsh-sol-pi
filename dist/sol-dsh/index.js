@@ -116,10 +116,7 @@ function agentFromPayload(payload) {
   return agent && typeof agent === "object" && "ctx" in agent ? agent : void 0;
 }
 function executionAgent(exec) {
-  if (exec.agent && typeof exec.agent === "object") return exec.agent;
-  const caller = exec.caller;
-  if (caller && typeof caller === "object" && "ctx" in caller) return caller;
-  return void 0;
+  return exec.agent && typeof exec.agent === "object" ? exec.agent : void 0;
 }
 function contentFromDecision(decision, result) {
   if (decision.kind !== "accept") return void 0;
@@ -174,7 +171,7 @@ function solDshRuntimeRoot(agent) {
   return join(sessionDir(agent), "dsh-sol-pi", sessionId(agent));
 }
 function sessionCwd(agent, fallback = process.cwd()) {
-  const cwd = agent?.session?.cwd;
+  const cwd = agent?.session?.header?.cwd;
   return typeof cwd === "string" && cwd.length > 0 ? cwd : fallback;
 }
 
@@ -190,6 +187,8 @@ var THEN_RUN_SCHEMA = {
   required: ["command"]
 };
 var FUSED_TOOLS = ["edit", "write"];
+var MUTATION_PATH_KEYS = ["path", "file_path", "filePath", "file"];
+var LITERAL_CONTRACT_KEYS = ["path", "file_path", "filePath"];
 var THEN_RUN_LEAD = "After a successful mutation, you MUST pass then_run {command, timeout?} to run the immediate format/test/build in the SAME observation. Do not split that follow-up into a later bash turn.";
 function thenRunFromArgs(args) {
   const thenRun = recordValue(args, "then_run");
@@ -202,45 +201,78 @@ function thenRunFromArgs(args) {
   };
 }
 function mutationPath(args) {
-  const path = recordValue(args, "path") ?? recordValue(args, "file_path") ?? recordValue(args, "filePath");
-  return typeof path === "string" && path.length > 0 ? path : void 0;
+  for (const key of MUTATION_PATH_KEYS) {
+    const value = recordValue(args, key);
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return void 0;
 }
 function withoutThenRun(args) {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
   const { then_run: _ignored, ...rest } = args;
   return rest;
 }
+function declaredProperties(parameters) {
+  if (!parameters) return {};
+  return parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties) ? parameters.properties : parameters;
+}
 function extendParameters(parameters) {
-  const properties = parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties) ? parameters.properties : parameters;
-  const usingJsonSchemaRoot = "type" in parameters || "properties" in parameters;
-  if (usingJsonSchemaRoot) {
+  if ("type" in parameters || "properties" in parameters) {
     return {
       ...parameters,
       type: "object",
-      properties: { ...properties, then_run: THEN_RUN_SCHEMA }
+      properties: {
+        ...declaredProperties(parameters),
+        then_run: THEN_RUN_SCHEMA
+      }
     };
   }
   return { ...parameters, then_run: THEN_RUN_SCHEMA };
 }
 function hasThenRunParameter(parameters) {
-  if (!parameters) return false;
-  const properties = parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties) ? parameters.properties : parameters;
-  return Boolean(properties.then_run);
+  return Boolean(declaredProperties(parameters).then_run);
+}
+function isLiteralMutation(base) {
+  const properties = declaredProperties(base.parameters);
+  return LITERAL_CONTRACT_KEYS.some((key) => properties[key] !== void 0);
+}
+function delegatingName(name2) {
+  return `${name2}_and_run`;
 }
 async function runBash(ctx, thenRun, exec) {
   const args = { command: thenRun.command };
-  if (thenRun.timeout !== void 0) args.timeout = thenRun.timeout;
-  return ctx.tools.execute({
-    name: "bash",
-    args,
-    caller: exec.caller ?? exec.agent,
-    signal: exec.signal
+  args.description = `then_run: ${thenRun.command.slice(0, 60)}`;
+  if (thenRun.timeout !== void 0) args.timeoutMs = Math.round(thenRun.timeout * 1e3);
+  const batch = await ctx.tools.execute({
+    calls: [
+      {
+        type: "tool-call",
+        id: `${exec.callId}-then-run`,
+        name: "bash",
+        arguments: JSON.stringify(args)
+      }
+    ],
+    signal: exec.signal ?? new AbortController().signal,
+    agent: exec.agent,
+    toolSet: exec.toolSet
   });
+  return batch.results[0]?.result ?? {
+    content: [{ type: "text", text: "bash returned no result." }],
+    isError: true
+  };
+}
+function commandIncomplete(output) {
+  if (output.includes("moved to background job")) return true;
+  return [...output.matchAll(/\[exit code: (-?\d+)\]/g)].some((match) => Number(match[1]) !== 0);
 }
 function wrapTool(ctx, agent, name2, base) {
+  const target = name2 === base.name ? () => base : () => resolveBase(ctx, agent, base.name) ?? base;
   const extras = /* @__PURE__ */ new Map();
-  const extraKey = (exec) => exec.token ?? exec.id ?? exec.callId ?? `${name2}:${JSON.stringify(exec.args)}`;
-  const description = base.description.includes("then_run") ? base.description : `${THEN_RUN_LEAD}
+  const extraKey = (exec) => exec.token ?? exec.callId;
+  const lead = name2 === base.name ? THEN_RUN_LEAD : `${THEN_RUN_LEAD}
+
+${name2} takes the same arguments as ${base.name}.`;
+  const description = base.description.includes("then_run") ? base.description : `${lead}
 
 ${base.description}`;
   return {
@@ -254,10 +286,10 @@ ${base.description}`;
       const thenRun = thenRunFromArgs(args);
       const rest = withoutThenRun(args);
       const relativePath = mutationPath(args);
-      const absolutePath = relativePath ? resolveToolPath(sessionCwd(agent), relativePath) : void 0;
+      const absolutePath = relativePath ? resolveToolPath(sessionCwd(exec.agent ?? agent), relativePath) : void 0;
       const work = async () => {
         try {
-          return await base.execute(rest, exec);
+          return await target().execute(rest, exec);
         } catch (error) {
           if (thenRun) throw thenRunSkippedError(error);
           throw error;
@@ -265,6 +297,10 @@ ${base.description}`;
       };
       const value = absolutePath ? await withFusedFileQueue(absolutePath, work) : await work();
       if (!thenRun) return value;
+      if (exec.parent !== void 0) {
+        extras.set(extraKey(exec), `${THEN_RUN_SKIPPED} transport sub-dispatch; the command was not run.`);
+        return value;
+      }
       if (!absolutePath) {
         extras.set(extraKey(exec), `${THEN_RUN_SKIPPED} mutation path is unavailable; the command was not run.`);
         return value;
@@ -275,7 +311,7 @@ ${base.description}`;
         const output = textOf(bashResult.content);
         extras.set(
           extraKey(exec),
-          bashResult.isError ? formatThenRunFailure(output, new Error(output || "bash failed")) : formatThenRunSuccess(output)
+          bashResult.isError || commandIncomplete(output) ? formatThenRunFailure(output, new Error(output || "bash failed")) : formatThenRunSuccess(output)
         );
       } catch (error) {
         extras.set(extraKey(exec), formatThenRunFailure("", error));
@@ -293,36 +329,62 @@ ${base.description}`;
   };
 }
 function resolveBase(ctx, agent, name2) {
-  return agent.ctx.tools.get(name2, agent) ?? agent.ctx.tools.get(name2) ?? ctx.tools.get(name2, agent) ?? ctx.tools.get(name2);
+  return agent.ctx.tools.get(name2, agent) ?? ctx.tools.get(name2);
 }
 function attachActionFusion(ctx, agent, enabled) {
   if (!enabled()) return;
   const tools = agent.ctx?.tools;
   if (!tools?.register) return;
-  for (const name2 of FUSED_TOOLS) {
-    const base = resolveBase(ctx, agent, name2);
-    if (!base) continue;
-    if (hasThenRunParameter(base.parameters)) continue;
-    try {
-      tools.register(wrapTool(ctx, agent, name2, base));
-    } catch (error) {
-      ctx.logger?.warn?.(
-        `dsh-sol-pi: could not shadow ${name2} with then_run on agent ${agent.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`
-      );
+  const claims = /* @__PURE__ */ new Map();
+  const drop = (name2) => {
+    const claim = claims.get(name2);
+    if (!claim) return;
+    claims.delete(name2);
+    if (resolveBase(ctx, agent, name2) === claim.definition) claim.dispose();
+  };
+  const sync = () => {
+    if (!enabled()) {
+      for (const name2 of [...claims.keys()]) drop(name2);
+      return;
     }
-  }
+    for (const name2 of FUSED_TOOLS) {
+      const base = resolveBase(ctx, agent, name2);
+      if (!base || hasThenRunParameter(base.parameters)) {
+        drop(name2);
+        continue;
+      }
+      const claim = isLiteralMutation(base) ? name2 : delegatingName(name2);
+      if (claims.get(name2)?.definition.name === claim) continue;
+      drop(name2);
+      const definition = wrapTool(ctx, agent, claim, base);
+      try {
+        claims.set(name2, { definition, dispose: tools.register(definition) });
+      } catch (error) {
+        ctx.logger?.warn?.(
+          `dsh-sol-pi: could not register ${claim} with then_run on agent ${agent.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  };
+  sync();
+  agent.ctx.on?.("tools/change", sync);
 }
 function registerActionFusion(ctx, enabled = () => true) {
+  const attached = /* @__PURE__ */ new WeakSet();
+  const attachOnce = (agent) => {
+    if (attached.has(agent)) return;
+    attached.add(agent);
+    attachActionFusion(ctx, agent, enabled);
+  };
   const onAgent = (payload) => {
     const agent = agentFromPayload(payload);
-    if (agent) attachActionFusion(ctx, agent, enabled);
+    if (agent) attachOnce(agent);
   };
-  ctx.on("agent/session-start", onAgent);
   ctx.on("agent/created", onAgent);
   if (typeof ctx.inject === "function") {
     ctx.inject(["agents"], (child) => {
       try {
-        for (const agent of child.agents?.list?.() ?? []) attachActionFusion(ctx, agent, enabled);
+        for (const agent of child.agents?.list?.() ?? []) attachOnce(agent);
       } catch (error) {
         ctx.logger?.warn?.(
           `dsh-sol-pi: could not wrap live agents: ${error instanceof Error ? error.message : String(error)}`
@@ -403,7 +465,8 @@ var SOL_DSH_DEFAULTS = {
     reducerModel: ""
   },
   onlineContextCompact: {
-    enabled: true,
+    // Overlaps dsh-vcc compaction; the DSH host hooks are not ported, so it stays off.
+    enabled: false,
     cacheWriteReadRatio: 50,
     keepRecentTokens: 0,
     nativeSummaryTokenEstimate: 1e3,
@@ -732,11 +795,11 @@ function receiptText(command, archive, validated, provider) {
 // src/sol-dsh/epr.ts
 function commandFromExecution(exec) {
   if (exec.name === "bash") {
-    const command2 = recordValue(exec.args, "command");
+    const command2 = recordValue(exec.arguments, "command");
     return typeof command2 === "string" && command2.length > 0 ? command2 : void 0;
   }
   if (exec.name !== "write" && exec.name !== "edit") return void 0;
-  const thenRun = recordValue(exec.args, "then_run");
+  const thenRun = recordValue(exec.arguments, "then_run");
   const command = recordValue(thenRun, "command");
   return typeof command === "string" && command.length > 0 ? command : void 0;
 }
@@ -763,10 +826,10 @@ async function collectStreamText(ctx, options) {
   let usageTokens = 0;
   for await (const chunk of ctx.llm.stream(options)) {
     if (chunk.type === "text-delta" && typeof chunk.text === "string") text += chunk.text;
-    else if (chunk.type === "text" && typeof chunk.text === "string") text += chunk.text;
-    else if (typeof chunk.delta === "string") text += chunk.delta;
-    const usage = chunk.usage;
-    if (usage && typeof usage.totalTokens === "number") usageTokens = usage.totalTokens;
+    else if (chunk.type === "usage") {
+      const total = chunk.usage?.totalTokens;
+      if (typeof total === "number") usageTokens = total;
+    }
   }
   return { text, usageTokens };
 }
@@ -870,345 +933,6 @@ function registerEvidencePreservingReducer(ctx, configOf) {
     if (!reduced?.content) return decision;
     return acceptContent(decision, [...reduced.content]);
   });
-}
-
-// src/sol-core/online-context-compact/economics.ts
-var DEFAULT_COMPACTION_ECONOMICS = Object.freeze({
-  remainingRequestScale: 1,
-  remainingRequestStddevK: 0,
-  windowReserveTokens: 16384,
-  firstCompactionRequestScale: 2,
-  subsequentCompactionMargin: 1.5
-});
-var MINIMUM_VARIANCE_SAMPLES = 3;
-var SMALL_SAMPLE_SCALE = 0.5;
-function estimateRemainingRequests(input) {
-  const mean = input.completedBoundaryRequestCounts.reduce((total, count) => total + count, 0) / Math.max(1, input.completedBoundaryRequestCounts.length);
-  let lowerBound = mean;
-  if (input.standardDeviationK !== 0) {
-    if (input.completedBoundaryRequestCounts.length < MINIMUM_VARIANCE_SAMPLES) {
-      lowerBound *= SMALL_SAMPLE_SCALE;
-    } else {
-      const variance = input.completedBoundaryRequestCounts.reduce(
-        (total, count) => total + (count - mean) ** 2,
-        0
-      );
-      const deviation = Math.sqrt(variance / (input.completedBoundaryRequestCounts.length - 1));
-      lowerBound = Math.max(0, mean - input.standardDeviationK * deviation);
-    }
-  }
-  const unboundedExpectedRemainingRequests = 1 + Math.floor(lowerBound * Math.max(0, input.remainingBoundaries) * input.scale);
-  const windowRequestUpperBound = input.contextWindowTokens === null || input.averageContextTokenIncrement === null || input.averageContextTokenIncrement <= 0 ? null : Math.max(
-    0,
-    Math.floor((input.contextWindowTokens - input.contextTokens) / input.averageContextTokenIncrement)
-  );
-  return {
-    completedBoundaryRequestCounts: [...input.completedBoundaryRequestCounts],
-    requestsPerBoundaryMean: mean,
-    requestsPerBoundaryLowerBound: lowerBound,
-    unboundedExpectedRemainingRequests,
-    averageContextTokenIncrement: input.averageContextTokenIncrement,
-    windowRequestUpperBound,
-    expectedRemainingRequests: windowRequestUpperBound === null ? unboundedExpectedRemainingRequests : Math.min(unboundedExpectedRemainingRequests, windowRequestUpperBound)
-  };
-}
-function decideCompaction(input) {
-  const horizon = input.completedBoundaryRequestCounts === null ? null : estimateRemainingRequests({
-    completedBoundaryRequestCounts: input.completedBoundaryRequestCounts,
-    remainingBoundaries: input.remainingBoundaries,
-    scale: input.economics.remainingRequestScale,
-    standardDeviationK: input.economics.remainingRequestStddevK,
-    contextTokens: input.contextTokens,
-    contextWindowTokens: input.contextWindowTokens,
-    averageContextTokenIncrement: input.averageContextTokenIncrement
-  });
-  const savingTokens = input.archiveTokens - input.memoTokens;
-  const incrementalCacheCostRatio = input.cacheWriteReadRatio === null ? null : Math.max(0, input.cacheWriteReadRatio - 1);
-  const breakevenRequests = savingTokens > 0 && incrementalCacheCostRatio !== null ? input.writeTokens * incrementalCacheCostRatio / savingTokens : null;
-  const combinedBreakevenRequests = savingTokens > 0 && incrementalCacheCostRatio !== null ? (input.carriedDebtTokens + input.writeTokens * incrementalCacheCostRatio) / savingTokens : null;
-  const firstCompaction = input.priorCompactionCount === 0;
-  const effectiveHorizonRequests = horizon === null ? null : firstCompaction ? Math.min(
-    horizon.expectedRemainingRequests * input.economics.firstCompactionRequestScale,
-    horizon.windowRequestUpperBound ?? Number.POSITIVE_INFINITY
-  ) : horizon.expectedRemainingRequests;
-  const windowProtection = input.contextWindowTokens !== null && input.contextTokens >= input.contextWindowTokens - input.economics.windowReserveTokens;
-  const baseEconomic = horizon !== null && horizon.expectedRemainingRequests > 0 && breakevenRequests !== null && breakevenRequests <= horizon.expectedRemainingRequests;
-  const firstEconomic = firstCompaction && effectiveHorizonRequests !== null && effectiveHorizonRequests > 0 && breakevenRequests !== null && breakevenRequests <= effectiveHorizonRequests;
-  const subsequentMarginOpen = !firstCompaction && horizon !== null && breakevenRequests !== null && breakevenRequests * input.economics.subsequentCompactionMargin <= horizon.expectedRemainingRequests;
-  const carriedDebtGateOpen = !firstCompaction && horizon !== null && combinedBreakevenRequests !== null && combinedBreakevenRequests <= horizon.expectedRemainingRequests;
-  const economic = firstCompaction ? firstEconomic : baseEconomic && subsequentMarginOpen && carriedDebtGateOpen;
-  const compressible = savingTokens > 0;
-  const compact = compressible && (windowProtection || economic);
-  return {
-    writeTokens: input.writeTokens,
-    archiveTokens: input.archiveTokens,
-    memoTokens: input.memoTokens,
-    contextTokens: input.contextTokens,
-    ...horizon ?? {
-      completedBoundaryRequestCounts: null,
-      requestsPerBoundaryMean: null,
-      requestsPerBoundaryLowerBound: null,
-      unboundedExpectedRemainingRequests: null,
-      averageContextTokenIncrement: input.averageContextTokenIncrement,
-      windowRequestUpperBound: null,
-      expectedRemainingRequests: null
-    },
-    breakevenRequests,
-    combinedBreakevenRequests,
-    effectiveHorizonRequests,
-    cacheWriteReadRatio: input.cacheWriteReadRatio,
-    incrementalCacheCostRatio,
-    priorCompactionCount: input.priorCompactionCount,
-    carriedDebtTokens: input.carriedDebtTokens,
-    cacheDebtRepaymentTokens: input.cacheDebtRepaymentTokens,
-    compact,
-    reason: !compressible ? "non_positive_saving" : windowProtection ? "window_protection" : economic ? "economic" : horizon === null ? "horizon_unavailable" : breakevenRequests === null ? "cache_ratio_unavailable" : !firstCompaction && baseEconomic && !subsequentMarginOpen ? "deferred_subsequent_margin" : !firstCompaction && baseEconomic && !carriedDebtGateOpen ? "deferred_carried_debt" : "deferred_economic"
-  };
-}
-
-// src/sol-core/online-context-compact/plan.ts
-var PLAN_STATUSES = ["pending", "in_progress", "completed"];
-var MAX_PLAN_STEPS = 128;
-var MAX_PLAN_STRING_BYTES = 16384;
-function isRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isBoundedString(value) {
-  return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= MAX_PLAN_STRING_BYTES;
-}
-function isPlanStatus(value) {
-  return PLAN_STATUSES.some((status) => status === value);
-}
-function parsePlanSteps(value) {
-  if (!Array.isArray(value) || value.length > MAX_PLAN_STEPS) return;
-  const steps = [];
-  for (const item of value) {
-    if (!isRecord2(item) || Object.keys(item).length !== 3 || !isBoundedString(item.id) || !isBoundedString(item.goal) || !isPlanStatus(item.status)) {
-      return;
-    }
-    steps.push({ id: item.id, goal: item.goal, status: item.status });
-  }
-  if (new Set(steps.map((step) => step.id)).size !== steps.length) return;
-  return steps;
-}
-function analyzePlanTransition(previous, next) {
-  const previousById = new Map(previous.map((step) => [step.id, step]));
-  const completedSteps = [];
-  const advice = [];
-  for (const step of next) {
-    const prior = previousById.get(step.id);
-    if ((!prior || prior.status !== "completed") && step.status === "completed") completedSteps.push(step);
-    if (prior && prior.goal !== step.goal) {
-      advice.push(`Plan step ${JSON.stringify(step.id)} changed goal; reuse an id only for the same goal.`);
-    }
-  }
-  const inProgress = next.filter((step) => step.status === "in_progress").length;
-  if (inProgress > 1) advice.push("Keep at most one plan step in_progress.");
-  if (inProgress === 0 && next.some((step) => step.status === "pending")) {
-    advice.push("Mark one pending plan step in_progress before starting it.");
-  }
-  return { completedSteps, advice };
-}
-
-// src/sol-core/online-context-compact/state.ts
-function initialOnlineState() {
-  return {
-    version: 1,
-    epoch: 0,
-    plan: [],
-    pendingProgress: [],
-    requestCount: 0,
-    lastBoundaryRequestCount: 0,
-    completedBoundaryRequestCounts: [],
-    lastContextTokens: null,
-    positiveContextDeltaTotal: 0,
-    positiveContextDeltaCount: 0,
-    nativeCompactionCount: 0,
-    cacheDebtTokens: 0,
-    cacheDebtRepaymentTokens: 0
-  };
-}
-function recordProviderRequest(state, contextTokens) {
-  const delta = state.lastContextTokens === null ? 0 : contextTokens - state.lastContextTokens;
-  const cacheDebtTokens = Math.max(0, state.cacheDebtTokens - state.cacheDebtRepaymentTokens);
-  return {
-    ...state,
-    requestCount: state.requestCount + 1,
-    lastContextTokens: contextTokens,
-    positiveContextDeltaTotal: state.positiveContextDeltaTotal + Math.max(0, delta),
-    positiveContextDeltaCount: state.positiveContextDeltaCount + (delta > 0 ? 1 : 0),
-    cacheDebtTokens,
-    cacheDebtRepaymentTokens: cacheDebtTokens === 0 ? 0 : state.cacheDebtRepaymentTokens
-  };
-}
-function recordBoundary(state, plan, progress) {
-  const interval = Math.max(0, state.requestCount - state.lastBoundaryRequestCount);
-  return {
-    ...state,
-    plan: [...plan],
-    pendingProgress: progress ? [...state.pendingProgress, progress] : state.pendingProgress,
-    lastBoundaryRequestCount: state.requestCount,
-    completedBoundaryRequestCounts: [...state.completedBoundaryRequestCounts, interval]
-  };
-}
-function recordCompaction(state, debt) {
-  return {
-    ...state,
-    epoch: state.epoch + 1,
-    plan: [],
-    pendingProgress: [],
-    lastContextTokens: null,
-    positiveContextDeltaTotal: 0,
-    positiveContextDeltaCount: 0,
-    nativeCompactionCount: state.nativeCompactionCount + 1,
-    cacheDebtTokens: Math.max(0, debt.debtTokens),
-    cacheDebtRepaymentTokens: Math.max(0, debt.repaymentTokens)
-  };
-}
-
-// src/sol-dsh/occ.ts
-function economicsFrom(config) {
-  return {
-    ...DEFAULT_COMPACTION_ECONOMICS,
-    windowReserveTokens: config.windowReserveTokens,
-    firstCompactionRequestScale: config.firstCompactionRequestScale,
-    subsequentCompactionMargin: config.subsequentCompactionMargin
-  };
-}
-function todosToPlan(args) {
-  const todos = recordValue(args, "todos");
-  if (!Array.isArray(todos)) return void 0;
-  const steps = todos.map((item, index) => {
-    const record = item;
-    const goal = typeof record.content === "string" ? record.content : typeof record.goal === "string" ? record.goal : "";
-    const statusRaw = typeof record.status === "string" ? record.status : "pending";
-    const status = statusRaw === "in_progress" || statusRaw === "completed" || statusRaw === "pending" ? statusRaw : "pending";
-    const id = typeof record.id === "string" && record.id.length > 0 ? record.id : `todo-${index + 1}`;
-    return { id, goal, status };
-  });
-  return parsePlanSteps(steps) ?? steps;
-}
-function measureTokens(ctx, agent) {
-  try {
-    const session = agent.session;
-    const messages = session?.messages ?? session?.log;
-    const meter = typeof ctx.get === "function" ? ctx.get("tokenMeter") : void 0;
-    if (meter && messages !== void 0) {
-      const measured = meter.measure(messages);
-      if (typeof measured === "number" && Number.isFinite(measured)) return measured;
-    }
-    const tokens = session?.contextTokens ?? session?.tokenCount;
-    if (typeof tokens === "number" && Number.isFinite(tokens)) return tokens;
-  } catch {
-  }
-  return 0;
-}
-function contextWindow(agent) {
-  const session = agent.session;
-  const model = session?.model;
-  const window = model?.contextWindow ?? session?.contextWindow;
-  return typeof window === "number" && window > 0 ? window : null;
-}
-function keepRecentTokens(config, windowTokens) {
-  if (config.keepRecentTokens > 0) return config.keepRecentTokens;
-  if (windowTokens === null) return 0;
-  return Math.floor(windowTokens * 0.16);
-}
-async function maybeCompact(ctx, agent, state, config) {
-  const compaction = ctx.compaction;
-  if (!compaction) return state;
-  const contextTokens = measureTokens(ctx, agent);
-  const windowTokens = contextWindow(agent);
-  const archiveTokens = Math.max(0, contextTokens - keepRecentTokens(config, windowTokens));
-  const remainingBoundaries = Math.max(1, state.plan.filter((step) => step.status !== "completed").length);
-  const averageIncrement = state.positiveContextDeltaCount > 0 ? state.positiveContextDeltaTotal / state.positiveContextDeltaCount : null;
-  const decision = decideCompaction({
-    writeTokens: contextTokens,
-    archiveTokens,
-    memoTokens: config.nativeSummaryTokenEstimate,
-    contextTokens,
-    contextWindowTokens: windowTokens,
-    remainingBoundaries,
-    completedBoundaryRequestCounts: state.completedBoundaryRequestCounts,
-    averageContextTokenIncrement: averageIncrement,
-    cacheWriteReadRatio: config.cacheWriteReadRatio,
-    priorCompactionCount: state.nativeCompactionCount,
-    carriedDebtTokens: state.cacheDebtTokens,
-    cacheDebtRepaymentTokens: state.cacheDebtRepaymentTokens,
-    economics: economicsFrom(config)
-  });
-  if (!decision.compact) return state;
-  try {
-    if (typeof agent.whenIdle === "function") await agent.whenIdle();
-    await compaction.compactNow(agent, void 0);
-    return recordCompaction(state, {
-      debtTokens: decision.writeTokens * Math.max(0, config.cacheWriteReadRatio - 1) / Math.max(1, decision.archiveTokens),
-      repaymentTokens: Math.max(0, decision.archiveTokens - decision.memoTokens)
-    });
-  } catch {
-    return state;
-  }
-}
-function registerOnlineContextCompact(ctx, configOf) {
-  const states = /* @__PURE__ */ new Map();
-  const keyOf = (agent) => agent?.id ?? agent?.session?.id ?? "default";
-  ctx.on("agent/session-start", ((payload) => {
-    const agent = agentFromPayload(payload);
-    if (!agent) return;
-    states.set(keyOf(agent), initialOnlineState());
-  }));
-  ctx.on("agent/disposed", ((payload) => {
-    states.delete(keyOf(agentFromPayload(payload)));
-  }));
-  listenPostExecute(ctx, async (exec, result, decision) => {
-    if (exec.name !== "todo_write" && exec.name !== "update_plan") return decision;
-    if (result.isError || decision.kind === "block") return decision;
-    const agent = executionAgent(exec);
-    const plan = todosToPlan(exec.args);
-    if (!plan) return decision;
-    const current = states.get(keyOf(agent)) ?? initialOnlineState();
-    const transition = analyzePlanTransition(current.plan, plan);
-    const completed = transition.completedSteps.at(-1);
-    states.set(
-      keyOf(agent),
-      recordBoundary(
-        current,
-        plan,
-        completed ? {
-          stepId: completed.id,
-          goal: completed.goal,
-          filesChanged: [],
-          verification: [],
-          decisions: [],
-          nextWork: plan.filter((step) => step.status !== "completed").map((step) => step.goal)
-        } : void 0
-      )
-    );
-    return decision;
-  }, false);
-  const attachCompactionHooks = (runtime) => {
-    runtime.on(
-      "agent/pre-step",
-      ((payload, next) => {
-        return (async () => {
-          try {
-            const config = configOf();
-            const agent = agentFromPayload(payload);
-            if (config.enabled && agent) {
-              const key = keyOf(agent);
-              const current = recordProviderRequest(states.get(key) ?? initialOnlineState(), measureTokens(runtime, agent));
-              states.set(key, await maybeCompact(runtime, agent, current, config));
-            }
-          } catch {
-          }
-          return next();
-        })();
-      })
-    );
-  };
-  if (typeof ctx.inject === "function") {
-    ctx.inject(["compaction"], (child) => attachCompactionHooks(child));
-  }
 }
 
 // src/sol-core/observation-pack/observation.ts
@@ -1348,11 +1072,11 @@ function retrieveHint(path, locator) {
 }
 function dumpCommand(exec) {
   if (exec.name === "bash") {
-    const command2 = recordValue(exec.args, "command");
+    const command2 = recordValue(exec.arguments, "command");
     return typeof command2 === "string" && command2.length > 0 ? command2 : void 0;
   }
   if (exec.name !== "edit" && exec.name !== "write") return void 0;
-  const command = recordValue(recordValue(exec.args, "then_run"), "command");
+  const command = recordValue(recordValue(exec.arguments, "then_run"), "command");
   return typeof command === "string" && command.length > 0 ? command : void 0;
 }
 async function packObservation(exec, result, config, agent, spill) {
@@ -1364,7 +1088,7 @@ async function packObservation(exec, result, config, agent, spill) {
   }
   const observation = createObservationFromText(
     exec.name,
-    String(exec.id ?? exec.callId ?? exec.token ?? `${exec.name}:${text.length}`),
+    exec.callId,
     text,
     solDshRuntimeRoot(agent),
     config.thresholdBytes
@@ -1372,9 +1096,15 @@ async function packObservation(exec, result, config, agent, spill) {
   if (!observation) return void 0;
   await ensureStored(observation);
   let locator;
-  if (spill) {
+  const sessionId2 = agent?.session?.id ?? agent?.id;
+  if (spill && typeof sessionId2 === "string" && sessionId2.length > 0) {
     try {
-      const saved = await spill.saveText({ text: observation.text, mediaType: "text/plain" });
+      const saved = await spill.saveText({
+        owner: { sessionId: sessionId2 },
+        source: { kind: "tool", toolName: exec.name, callId: exec.callId, label: "result" },
+        suggestedName: `${exec.name}-result.txt`,
+        content: observation.text
+      });
       locator = saved.locator;
     } catch {
       locator = void 0;
@@ -1447,7 +1177,11 @@ function apply(ctx, config = {}) {
   registerEvidencePreservingReducer(ctx, () => source().evidencePreservingReducer);
   registerObservationPack(ctx, () => source().observationPack);
   registerActionFusion(ctx, () => source().actionFusion.enabled);
-  registerOnlineContextCompact(ctx, () => source().onlineContextCompact);
+  if (source().onlineContextCompact.enabled) {
+    ctx.logger?.warn?.(
+      "dsh-sol-pi: onlineContextCompact is not wired for DSH 0.2.2 (overlaps dsh-vcc compaction); ignoring it"
+    );
+  }
   ctx.inject?.(["systemPrompt"], (child) => {
     const prompt = child.systemPrompt;
     if (!prompt?.section) return;
@@ -1455,13 +1189,26 @@ function apply(ctx, config = {}) {
     prompt.section({
       name: "dsh-sol-pi",
       order,
-      text: () => {
+      text: (context) => {
         const current = source();
         const parts = ["SoL (dsh-sol-pi) is active."];
         if (current.actionFusion.enabled) {
-          parts.push(
-            "edit and write accept optional then_run {command, timeout?}. After a successful file mutation, you MUST pass then_run for the immediate format/test/build instead of a later bash call."
+          const names = FUSED_TOOLS.flatMap(
+            (name2) => [name2, delegatingName(name2)].filter(
+              (candidate) => hasThenRunParameter(ctx.tools.get(candidate, context?.scope)?.parameters ?? {})
+            )
           );
+          if (names.length > 0) {
+            const variants = names.filter((name2) => name2.endsWith("_and_run"));
+            parts.push(
+              `${names.join(" and ")} ${names.length === 1 ? "accepts" : "accept"} optional then_run {command, timeout?}. After a successful file mutation, you MUST pass then_run for the immediate format/test/build instead of a later bash call.`
+            );
+            if (variants.length > 0) {
+              parts.push(
+                `${variants.join(" and ")} take the same arguments as ${variants.map((name2) => name2.replace("_and_run", "")).join(" and ")} plus then_run.`
+              );
+            }
+          }
         }
         if (current.observationPack.enabled && current.observationPack.mode === "immediate") {
           parts.push(
@@ -1469,10 +1216,9 @@ function apply(ctx, config = {}) {
           );
         }
         if (current.evidencePreservingReducer.enabled) {
-          parts.push("Long diagnostic logs may be replaced with a verified evidence receipt pointing at a local archive.");
-        }
-        if (current.onlineContextCompact.enabled) {
-          parts.push("Keep todo_write current. Completed work may be compacted when the remaining horizon repays cache cost.");
+          parts.push(
+            "Long diagnostic logs may be replaced with a verified evidence receipt pointing at a local archive."
+          );
         }
         return parts.join(" ");
       }

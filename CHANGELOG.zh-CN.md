@@ -7,6 +7,20 @@
 
 English: [CHANGELOG.md](./CHANGELOG.md)
 
+## [0.2.9] - 2026-11-16
+
+### 修复
+- **DSH 0.2.2 宿主 API：** `ToolExecution` 改用 `arguments` / `callId`（不再是 `args` / `id`）；`ctx.tools.execute` 使用批量形态 `{ calls, signal, agent, toolSet }`；`ctx.spillStore.saveText` 使用 `{ owner: { sessionId }, source, suggestedName, content }`；会话工作目录取自 `Session.header.cwd`；LLM 用量从 `usage` 数据块读取；融合挂在 `agent/created`（DSH 没有 `agent/session-start` 事件）；`then_run` 会带上 DSH `bash` 必需的 `description`，并把 `then_run.timeout` 映射成 `timeoutMs`。
+- 失败或被转入后台的 `then_run` 命令现在记为 `[then_run:failed]`，不再记为 `[then_run:succeeded]`：DSH 的 `bash` 只在文本里给出退出码（`[exit code: N]`），超时命令会被转入后台任务。
+- PTC 下的嵌套子调度（`exec.parent`）不再尝试宿主会以 `UNKNOWN_TOOL` 拒绝的 `bash` 调用，观察结果改为 `[then_run:skipped]`。
+
+### 变更
+- 动作融合在 agent 自己的层注册，不再抢占同行插件持有的 `edit`/`write` 名称。字面契约保留原名并加上 `then_run`；外来契约（例如 hashline 锚点）改用 sol-pi 自己的 `edit_and_run` / `write_and_run`，委托给当前可见的定义并在委托前剥离 `then_run`。占用在 `tools/change` 上重新判定，卸载只删除 sol-pi 自己注册的定义，系统提示只宣传该装配作用域里真正接受 `then_run` 的名称。
+- 在线上下文压缩默认关闭，且在 DSH 0.2.2 上未接线：它与 `dsh-vcc` 压缩重叠，宿主也没有请求尺寸计量接口。打开只会记录一条警告，不挂载任何钩子；相关键保留为 schema 默认值以备后续接线。
+
+### 新增
+- 显式的 `semver` devDependency，使 peerDependencies 预检回归测试不再依赖嵌套在 `@earendil-works/pi-coding-agent` 里的那一份。
+
 ## [0.2.8] - 2026-09-29
 
 ### 变更

@@ -11,16 +11,18 @@ export type TextBlock = { readonly type: "text"; readonly text: string };
 
 export type ContentBlock = TextBlock | { readonly type: string; readonly [key: string]: unknown };
 
+/** DSH 0.2.2 `ToolExecution` — the shape `tools/post-execute` and tool bodies receive. */
 export type ToolExecution = {
 	readonly name: string;
-	readonly args: unknown;
-	readonly caller?: { readonly id?: string; readonly ctx?: DshContext; readonly session?: unknown };
-	readonly agent?: DshAgent;
-	readonly signal?: AbortSignal;
-	readonly id?: string;
-	readonly callId?: string;
+	readonly arguments: unknown;
+	readonly callId: string;
+	readonly rootCallId?: string;
 	readonly token?: symbol;
-	readonly parent?: unknown;
+	/** Set only on transport sub-dispatches (PTC `run_code` inner calls). */
+	readonly parent?: symbol;
+	readonly agent?: DshAgent;
+	readonly toolSet?: unknown;
+	readonly signal?: AbortSignal;
 };
 
 export type ToolExecutionResult = {
@@ -76,9 +78,15 @@ export type DshContext = {
 	effect?(callback: () => void | (() => void), label?: string): void;
 	inject?(deps: readonly string[], callback: (ctx: DshContext) => void): void;
 	tools: {
-		get(name: string, scope?: unknown): ToolDefinition | undefined;
-		register(definition: ToolDefinition): () => void;
-		execute(call: { name: string; args: unknown; caller?: unknown; signal?: AbortSignal }): Promise<ToolExecutionResult>;
+		get(name: string, scope?: unknown, toolSet?: unknown): ToolDefinition | undefined;
+		register(definition: ToolDefinition, options?: { when?: unknown }): () => void;
+		/** DSH 0.2.2 batch API: one batch, one outcome per call, in input order. */
+		execute(input: {
+			readonly calls: readonly { type: "tool-call"; id: string; name: string; arguments: string }[];
+			readonly signal: AbortSignal;
+			readonly agent?: unknown;
+			readonly toolSet?: unknown;
+		}): Promise<{ readonly results: readonly { callId: string; result: ToolExecutionResult }[] }>;
 	};
 	llm: {
 		stream(options: Record<string, unknown>): AsyncIterable<{ type?: string; text?: string; [key: string]: unknown }>;
@@ -88,15 +96,21 @@ export type DshContext = {
 		compactNow(agent: unknown, signal?: AbortSignal): Promise<unknown>;
 	};
 	spillStore?: {
-		saveText(input: { text: string; mediaType?: string }): Promise<{
-			locator: string;
-			bytes: number;
-			retrievalHint: string;
-		}>;
+		saveText(input: {
+			owner: { sessionId: string };
+			source: { kind: "tool"; toolName: string; callId: string; label: string };
+			suggestedName: string;
+			content: string;
+		}): Promise<{ locator: string; bytes: number; retrievalHint: string }>;
 	};
 	tokenMeter?: { measure(input: unknown): number };
 	systemPrompt?: {
-		section(section: { name: string; order: number; text: string | (() => string) }): () => void;
+		/** DSH 0.2.2 `PromptSection.text` is evaluated per assembly with that assembly's context. */
+		section(section: {
+			name: string;
+			order: number;
+			text: string | ((context: { scope?: unknown }) => string);
+		}): () => void;
 		getSectionOrder?(name: string): number;
 	};
 	agents?: { list(): DshAgent[]; get?(id: string): DshAgent | undefined };
@@ -111,8 +125,8 @@ export type DshAgent = {
 	readonly options?: { readonly provider?: string; readonly model?: string };
 	readonly session?: {
 		readonly id?: string;
-		readonly dir?: string;
-		readonly cwd?: string;
+		/** DSH `Session.header` — validated creation metadata, including the absolute `cwd`. */
+		readonly header?: { readonly cwd?: string };
 		readonly provider?: string;
 		readonly modelId?: string;
 		readonly model?: unknown;
@@ -144,10 +158,7 @@ export function agentFromPayload(payload: unknown): DshAgent | undefined {
 }
 
 export function executionAgent(exec: ToolExecution): DshAgent | undefined {
-	if (exec.agent && typeof exec.agent === "object") return exec.agent;
-	const caller = exec.caller;
-	if (caller && typeof caller === "object" && "ctx" in caller) return caller as DshAgent;
-	return undefined;
+	return exec.agent && typeof exec.agent === "object" ? exec.agent : undefined;
 }
 
 export function isAcceptDecision(decision: PostToolDecision): decision is Extract<PostToolDecision, { kind: "accept" }> {

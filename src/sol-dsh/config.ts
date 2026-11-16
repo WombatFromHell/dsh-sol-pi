@@ -117,7 +117,8 @@ export const SOL_DSH_DEFAULTS: SolDshConfig = {
 		reducerModel: "",
 	},
 	onlineContextCompact: {
-		enabled: true,
+		// Overlaps dsh-vcc compaction; the DSH host hooks are not ported, so it stays off.
+		enabled: false,
 		cacheWriteReadRatio: 50,
 		keepRecentTokens: 0,
 		nativeSummaryTokenEstimate: 1000,

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 中文版：[CHANGELOG.zh-CN.md](./CHANGELOG.zh-CN.md)
 
+## [0.2.9] - 2026-11-16
+
+### Fixed
+- **DSH 0.2.2 host API:** `ToolExecution` reads `arguments` / `callId` (not `args` / `id`); `ctx.tools.execute` uses the batch shape `{ calls, signal, agent, toolSet }`; `ctx.spillStore.saveText` uses `{ owner: { sessionId }, source, suggestedName, content }`; the session working directory comes from `Session.header.cwd`; LLM usage is read from the `usage` chunk; fusion attaches on `agent/created` (`agent/session-start` is not a DSH event); the `then_run` dispatch sends DSH `bash`'s required `description` and maps `then_run.timeout` to `timeoutMs`.
+- A failing or backgrounded `then_run` command is now reported as `[then_run:failed]`, not `[then_run:succeeded]`: DSH's `bash` reports a non-zero exit only in text (`[exit code: N]`) and moves an expired command to a background job.
+- Under PTC, a nested sub-dispatch (`exec.parent`) no longer attempts a `bash` call the host denies as `UNKNOWN_TOOL`; the observation reports `[then_run:skipped]` instead.
+
+### Changed
+- Action Fusion registers on the agent's own layer and never takes a mutation name a peer plugin holds. A literal `edit`/`write` contract keeps its name with `then_run`; a foreign contract (e.g. hashline anchors) gets sol-pi's own `edit_and_run` / `write_and_run`, which delegate to the currently visible definition and strip `then_run` before delegating. Claims are re-decided on `tools/change`, teardown deletes only definitions sol-pi registered, and the system prompt advertises only names that accept `then_run` in that assembly scope.
+- Online Context Compact is off by default and not wired on DSH 0.2.2 — it overlaps `dsh-vcc` compaction and the host exposes no request-size meter. Enabling it logs a warning and attaches nothing; its keys stay at schema defaults for a future port.
+
+### Added
+- `semver` as an explicit devDependency, so the peerDependencies preflight regression test no longer relies on the copy nested inside `@earendil-works/pi-coding-agent`.
 ## [0.2.8] - 2026-09-29
 
 ### Changed

@@ -12,10 +12,10 @@ Configuration contract: [dsh-configuration.md](dsh-configuration.md). Research: 
 |---|---|
 | Host plugin | Shipped. Named exports `name` / `inject` / `apply` / `Config`. No `export default`. |
 | Settings card | Shipped. **侧栏 Plugins / 插件 → Installed / 已安装 → dsh-sol-pi**. zh + en, follows **通用设置 → 语言**. No SoL language field. |
-| Action Fusion | Shadows agent-scoped `edit`/`write` with optional `then_run` (session-start, created, and already-live agents). DSH has no first-party `then_run`. |
+| Action Fusion | Registers `then_run` on the agent layer: a literal `edit`/`write` keeps its name, a peer-owned contract gets sol-pi's own `edit_and_run` / `write_and_run` instead (sol-pi never takes a name a peer holds). DSH has no first-party `then_run`. |
 | ObservationPack | `tools/post-execute` returns `{ kind: "accept", content }`. Immediate dialect replaces test/build dumps (`go test`, `make`, fused `then_run`). `read` / `grep` / `git diff` / `git show` stay full. No `obs_recall`. |
 | Evidence-Preserving Reducer | Registers **before** ObservationPack. Same post-execute decision shape + `ctx.llm.stream` (`purpose` unset) on `Agent.options` route. Fail-open. |
-| Online Context Compact | Policy on `ctx.compaction` (`todo_write` + `compactNow`). `agent/pre-step` always calls `next()`. |
+| Online Context Compact | **Off by default and not wired on DSH 0.2.2** — overlaps `dsh-vcc` compaction and has no request-size meter seam. Enabling it logs a warning; nothing attaches. |
 | Tests | `npm test` and `npm run check:dsh` cover config, locales, packaging, and the plugin export shape. |
 | Upstream Pi | Unmodified. Do not fork Pi or DSH. |
 
@@ -81,7 +81,7 @@ Installing the plugin enables:
 - Action Fusion **on**
 - ObservationPack **on**, `mode: immediate`, `fullSends: 0` (replaces test/build dumps; not git/grep retrieval)
 - Evidence-Preserving Reducer **on**, reducer = current agent route
-- Online Context Compact **on**, `cacheWriteReadRatio: 50`
+- Online Context Compact **off** (not wired on DSH 0.2.2; overlaps `dsh-vcc`)
 
 Override in **侧栏 Plugins / 插件 → Installed / 已安装 → dsh-sol-pi**, or in the profile / `$DSH_HOME/cordis.patch.yml`:
 
@@ -107,9 +107,9 @@ This plugin's distinctive win is **native** Function Calling (`dsh-tools` defaul
 | Action Fusion `then_run` | **Almost unused.** The model never sees the `edit`/`write` schema, so it cannot pass `then_run`. The round-trip saving is already `run_code`. |
 | ObservationPack | **Outer dump only.** Nested `bash`/`edit` are skipped (`exec.parent`). A huge `run_code` print can still become a preview. |
 | Evidence-Preserving Reducer | **Weaker.** Inner diagnostic logs are log-only; reducing them does not shrink the next prompt. An oversized outer `run_code` result may still reduce. |
-| Online Context Compact | **Unchanged** (`todo_write` + window pressure), and it still only *when* to call `dsh-compaction-basic`. |
+| Online Context Compact | **Off by default**; not wired on DSH 0.2.2. |
 
-So under PTC the leftover value is mostly **packing/reducing the outer `run_code` dump** and OCC's compaction policy. Both overlap DSH's 50 KB spill and `dsh-compaction-basic` more than they do in native mode. Daily PTC users can skip this plugin; native sessions are the reason to install it.
+So under PTC the leftover value is mostly **packing/reducing the outer `run_code` dump**. That overlaps DSH's 50 KB spill and `dsh-compaction-basic` more than it does in native mode. Daily PTC users can skip this plugin; native sessions are the reason to install it.
 
 ## Native seams (why install is not enough by itself)
 
@@ -117,8 +117,8 @@ DSH does not ship `then_run`. The plugin must **put it on the model-facing `edit
 
 - `systemPrompt.section({ name, order, text })` — not Pi-style `{ id, source }`
 - `tools/post-execute` returns `{ kind: "accept", content }` — not a raw tool result
-- Fusion attaches on `agent/session-start`, `agent/created`, and `ctx.agents.list()` so a plugin loaded into an already-running `dsh web` still wraps live sessions
-- After install, **restart `dsh web`** and confirm a new request’s `edit` schema includes `then_run`. The model still has to pass the field; the description and system section tell it to fuse test/build/run instead of a second `bash` turn.
+- Fusion attaches on `agent/created` plus `ctx.agents.list()`, so a plugin loaded into an already-running `dsh web` still wraps live sessions (`agent/session-start` is not a DSH event name)
+- After install, **restart `dsh web`** and confirm a new request’s `edit` schema includes `then_run` — or `edit_and_run` when a peer plugin owns `edit`. The model still has to pass the field; the description and system section tell it to fuse test/build/run instead of a second `bash` turn.
 
 ## Security
 
