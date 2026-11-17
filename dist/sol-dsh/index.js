@@ -342,7 +342,7 @@ function attachActionFusion(ctx, agent, enabled) {
     claims.delete(name2);
     if (resolveBase(ctx, agent, name2) === claim.definition) claim.dispose();
   };
-  const sync = () => {
+  const syncInner = () => {
     if (!enabled()) {
       for (const name2 of [...claims.keys()]) drop(name2);
       return;
@@ -364,6 +364,16 @@ function attachActionFusion(ctx, agent, enabled) {
           `dsh-sol-pi: could not register ${claim} with then_run on agent ${agent.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+    }
+  };
+  let inPass = false;
+  const sync = () => {
+    if (inPass) return;
+    inPass = true;
+    try {
+      syncInner();
+    } finally {
+      inPass = false;
     }
   };
   sync();

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 中文版：[CHANGELOG.zh-CN.md](./CHANGELOG.zh-CN.md)
 
+## [0.2.10] - 2026-11-17
+
+### Fixed
+- **Host CPU spin:** Action Fusion no longer re-enters itself. DSH raises `tools/change` from inside `tools.get` while it assembles a tool layer lazily, so the handler's own registry reads re-emitted the event and the pass recursed synchronously — pinning one core at ~100% and freezing the web UI when a workspace with no sessions was added (dsh-graft-plugin#18). The pass now ignores re-entrant emissions raised by its own run; a genuine change arriving outside the pass still re-decides the claim. Regression test: `survives a tools/change emission raised from inside the sync pass`.
+
 ## [0.2.9] - 2026-11-16
 
 ### Fixed

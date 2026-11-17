@@ -7,6 +7,11 @@
 
 English: [CHANGELOG.md](./CHANGELOG.md)
 
+## [0.2.10] - 2026-11-17
+
+### 修复
+- **宿主 CPU 满载：** 动作融合不再自我重入。DSH 在惰性组装工具层时会在 `tools.get` 内部发出 `tools/change`，处理函数自己的注册读取会重新触发该事件，同步递归把单个核心打到 ~100%，并在新增无会话的工作区时冻结 web UI（dsh-graft-plugin#18）。现在本次调度期间由自己引发的重入发出会被忽略；调度之外到来的真实变更仍会重新判定占用。回归测试：`survives a tools/change emission raised from inside the sync pass`。
+
 ## [0.2.9] - 2026-11-16
 
 ### 修复

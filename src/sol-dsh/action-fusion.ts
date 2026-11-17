@@ -230,7 +230,7 @@ export function attachActionFusion(ctx: DshContext, agent: DshAgent, enabled: ()
 		claims.delete(name);
 		if (resolveBase(ctx, agent, name) === claim.definition) claim.dispose();
 	};
-	const sync = (): void => {
+	const syncInner = (): void => {
 		if (!enabled()) {
 			for (const name of [...claims.keys()]) drop(name);
 			return;
@@ -254,11 +254,22 @@ export function attachActionFusion(ctx: DshContext, agent: DshAgent, enabled: ()
 			}
 		}
 	};
-	// The claim depends on the contract this agent currently sees, and a peer may register it
-	// synchronously inside `agent/created` after our own pass resolves. dsh-tools emits
-	// `tools/change` on every registry edit, so the claim is re-decided there; our own
-	// registration re-syncs to a no-op. Agent-scope disposal cleans up both; hosts without an
-	// event API keep the single claim made above.
+	// DSH raises `tools/change` from inside `tools.get`/`register` while it assembles a layer
+	// lazily, so calling `sync` from that emission re-entered itself and pinned a core when a
+	// workspace was created (#18). Re-entrant emissions of our own pass are ignored; a genuine
+	// change arriving outside the pass still re-decides the claim.
+	// ponytail: a foreign change arriving mid-pass is dropped — upgrade to a coalesced
+	// microtask pass only if DSH stops raising `tools/change` from inside `get`.
+	let inPass = false;
+	const sync = (): void => {
+		if (inPass) return;
+		inPass = true;
+		try {
+			syncInner();
+		} finally {
+			inPass = false;
+		}
+	};
 	sync();
 	agent.ctx.on?.("tools/change", sync as (...args: never[]) => unknown);
 }

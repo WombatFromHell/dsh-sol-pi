@@ -535,6 +535,70 @@ describe("sol-dsh DSH native seams", () => {
 		expect(parameters.properties.edits).toBeDefined();
 	});
 
+	it("survives a tools/change emission raised from inside the sync pass", () => {
+		// DSH raises `tools/change` from inside `tools.get`/`register` (lazy layer assembly), so
+		// the handler used to re-enter itself and pin a core when a workspace is created (#18).
+		const registered: ToolDefinition[] = [];
+		const handlers: Array<() => unknown> = [];
+		let emissions = 0;
+		let lookups = 0;
+		let peerAcceptsThenRun = false;
+		const emit = (): void => {
+			emissions += 1;
+			if (emissions > 100) throw new Error("tools/change storm: unbounded re-entry");
+			for (const handler of handlers) handler();
+		};
+		const hashline: ToolDefinition = {
+			name: "edit",
+			description: "Edit a file by hashline anchor ranges.",
+			parameters: peerAcceptsThenRun
+				? { type: "object", properties: { file: { type: "string" }, then_run: { type: "object" } } }
+				: { type: "object", properties: { file: { type: "string" }, edits: { type: "array" } } },
+			output: { schema: { type: "object" }, render: () => [] },
+			async execute() {
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+		const agent = {
+			id: "agent-1",
+			ctx: {
+				tools: {
+					get: (name: string) => {
+						emit();
+						lookups += 1;
+						return name === "edit"
+							? {
+									...hashline,
+									parameters: peerAcceptsThenRun
+										? { type: "object", properties: { file: { type: "string" }, then_run: { type: "object" } } }
+										: { type: "object", properties: { file: { type: "string" }, edits: { type: "array" } } },
+								}
+								: undefined;
+					},
+					register: (definition: ToolDefinition) => {
+						registered.push(definition);
+						emit();
+						return (): void => {
+							emit();
+						};
+					},
+					execute: async () => ({ results: [] }),
+				},
+				on: (event: string, handler: (...args: never[]) => unknown) => {
+					if (event === "tools/change") handlers.push(handler);
+				},
+			},
+			agents: { list: () => [] },
+		} as unknown as DshAgent;
+		attachActionFusion(agent.ctx, agent, () => true);
+		expect(registered.map((definition) => definition.name)).toEqual(["edit_and_run"]);
+		// A genuine change outside our own pass still re-decides the claim.
+		const lookupsAfterAttach = lookups;
+		peerAcceptsThenRun = true;
+		emit();
+		expect(lookups).toBeGreaterThan(lookupsAfterAttach);
+	});
+
 	it("fuses the same name when the visible contract is sol-pi's literal one", () => {
 		const registered: ToolDefinition[] = [];
 		const base = (name: string): ToolDefinition => ({
