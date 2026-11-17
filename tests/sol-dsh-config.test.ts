@@ -493,7 +493,10 @@ describe("sol-dsh DSH native seams", () => {
 		expect(registered[0]?.name).toBe("edit");
 		expect(hasThenRunParameter(registered[0]?.parameters ?? {})).toBe(true);
 		expect(registered[0]?.description).toMatch(/then_run/);
-		expect(registered[0]?.output).toBe(base.output);
+		// The base contract is kept; only the skip marker the value carries is declared.
+		expect(base.output?.schema).toEqual({ type: "object" });
+		expect(registered[0]?.output?.render).toBe(base.output?.render);
+		expect((registered[0]?.output?.schema as { properties?: Record<string, unknown> }).properties?.then_run).toBeDefined();
 	});
 	it("registers a delegating variant instead of taking a peer's edit name", () => {
 		const registered: ToolDefinition[] = [];
@@ -1047,6 +1050,56 @@ describe("sol-dsh DSH native seams", () => {
 		};
 		const value = await tool.execute(call.arguments, call);
 		expect(String(value)).toContain("[then_run:skipped]");
+	});
+
+	it("declares the skip marker so codemode output validation accepts it", async () => {
+		// PTC validates the returned value against the tool's declared output schema. write's
+		// schema forbids extra properties, so an undeclared marker fails the whole call even
+		// though the mutation already applied.
+		const dir = mkdtempSync(join(tmpdir(), "sol-dsh-fusion-schema-"));
+		const filePath = join(dir, "c.txt");
+		writeFileSync(filePath, "x\\n");
+		const declared = { path: { type: "string" }, operation: { type: "string" } };
+		const base: ToolDefinition = {
+			name: "write",
+			description: "Create a file.",
+			parameters: { type: "object", properties: { path: { type: "string" } } },
+			output: { schema: { type: "object", properties: declared, additionalProperties: false }, render: () => [] },
+			async execute(): Promise<Record<string, string>> {
+				return { path: filePath, operation: "create" };
+			},
+		};
+		const fused: ToolDefinition[] = [];
+		const ctx = {
+			logger: { warn() {} },
+			tools: {
+				get: (name: string) => (name === "write" ? base : undefined),
+				register: (definition: ToolDefinition) => {
+					fused.push(definition);
+					return () => {};
+				},
+			},
+		};
+		const agent = { id: "agent-3", ctx, session: { id: "session-3", header: { cwd: dir } } } as unknown as DshAgent;
+		attachActionFusion(ctx as never, agent, () => true);
+		const tool = fused[0]!;
+		const call = {
+			name: "write",
+			arguments: { path: filePath, then_run: { command: "npm test" } },
+			callId: "call-11",
+			rootCallId: "call-11",
+			token: Symbol("t"),
+			signal: new AbortController().signal,
+			agent,
+			parent: Symbol("ptc"),
+		};
+		const value = (await tool.execute(call.arguments, call)) as Record<string, string>;
+		expect(value.then_run).toContain("[then_run:skipped]");
+		const schema = tool.output!.schema as { properties?: Record<string, unknown>; additionalProperties?: unknown };
+		expect(schema.properties?.then_run).toBeDefined();
+		expect(schema.additionalProperties).toBe(false);
+		// Every key the value carries must be one the schema declares.
+		expect(Object.keys(value)).toEqual(Object.keys(schema.properties!));
 	});
 
 	it("dispatches bash with the arguments the DSH tool schema requires", async () => {

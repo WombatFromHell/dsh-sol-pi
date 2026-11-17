@@ -272,6 +272,13 @@ function commandIncomplete(output) {
   if (output.includes("moved to background job")) return true;
   return [...output.matchAll(/\[exit code: (-?\d+)\]/g)].some((match) => Number(match[1]) !== 0);
 }
+function outputWithSkipProperty(output) {
+  if (!output || !output.schema || typeof output.schema !== "object" || Array.isArray(output.schema)) return output;
+  const schema = output.schema;
+  if (schema.type !== "object") return output;
+  const properties = recordValue(schema, "properties") ?? {};
+  return { ...output, schema: { ...schema, properties: { ...properties, then_run: { type: "string" } } } };
+}
 function wrapTool(ctx, agent, name2, base) {
   const target = name2 === base.name ? () => base : () => resolveBase(ctx, agent, base.name) ?? base;
   const extras = /* @__PURE__ */ new Map();
@@ -287,7 +294,7 @@ ${base.description}`;
     name: name2,
     description,
     parameters: extendParameters(base.parameters ?? {}),
-    output: base.output,
+    output: outputWithSkipProperty(base.output),
     isConcurrencySafe: () => false,
     async execute(args, exec) {
       const thenRun = thenRunFromArgs(args);

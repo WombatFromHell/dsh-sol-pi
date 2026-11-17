@@ -144,6 +144,20 @@ function commandIncomplete(output: string): boolean {
 	return [...output.matchAll(/\[exit code: (-?\d+)\]/g)].some((match) => Number(match[1]) !== 0);
 }
 
+/**
+ * Codemode hands the program the value and validates it against this schema, so a skip marker
+ * carried in the value must be a declared property: an undeclared one fails the whole call even
+ * though the mutation already applied. Object schemas declare it; string schemas carry it in the
+ * text. ponytail: array outputs never see the marker — declare a wrapper if a mutation ever returns one.
+ */
+function outputWithSkipProperty(output: ToolDefinition["output"]): ToolDefinition["output"] {
+	if (!output || !output.schema || typeof output.schema !== "object" || Array.isArray(output.schema)) return output;
+	const schema = output.schema as Record<string, unknown>;
+	if (schema.type !== "object") return output;
+	const properties = (recordValue(schema, "properties") ?? {}) as Record<string, unknown>;
+	return { ...output, schema: { ...schema, properties: { ...properties, then_run: { type: "string" } } } };
+}
+
 function wrapTool(ctx: DshContext, agent: DshAgent, name: string, base: ToolDefinition): ToolDefinition {
 	// A variant under our own name delegates to whatever currently holds the mutation name.
 	const target = name === base.name ? () => base : () => resolveBase(ctx, agent, base.name) ?? base;
@@ -157,7 +171,7 @@ function wrapTool(ctx: DshContext, agent: DshAgent, name: string, base: ToolDefi
 		name,
 		description,
 		parameters: extendParameters(base.parameters ?? {}),
-		output: base.output,
+		output: outputWithSkipProperty(base.output),
 		isConcurrencySafe: () => false,
 		async execute(args: unknown, exec: ToolExecution) {
 			const thenRun = thenRunFromArgs(args);
