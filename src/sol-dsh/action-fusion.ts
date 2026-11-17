@@ -64,6 +64,15 @@ function withoutThenRun(args: unknown): unknown {
 	return rest;
 }
 
+/** Codemode hands the program `value`, never content blocks, so a skipped check must be in the value. */
+// ponytail: the marker rides in the returned value; a fused tool whose output schema forbids extra
+// properties would fail validation there — widen that schema if one ever appears.
+function withSkipMarker(value: unknown, marker: string): unknown {
+	if (typeof value === "string") return `${value}\n\n${marker}`;
+	if (value && typeof value === "object" && !Array.isArray(value)) return { ...value, then_run: marker };
+	return value;
+}
+
 /** The parameter names a definition declares, in both schema-root and bare-object shapes. */
 function declaredProperties(parameters: Record<string, unknown> | undefined): Record<string, unknown> {
 	if (!parameters) return {};
@@ -165,16 +174,19 @@ function wrapTool(ctx: DshContext, agent: DshAgent, name: string, base: ToolDefi
 			};
 			const value = absolutePath ? await withFusedFileQueue(absolutePath, work) : await work();
 			if (!thenRun) return value;
+			// A skip is only visible to the caller if it rides in the value, under a transport call.
+			const skip = (marker: string): unknown => {
+				extras.set(extraKey(exec), marker);
+				return exec.parent !== undefined ? withSkipMarker(value, marker) : value;
+			};
 			// Under PTC only calls with a parent may run native tools, so a nested `bash`
 			// dispatch from here would be denied as UNKNOWN_TOOL. Skip it; the outer
 			// transport call still runs the command the model asked for.
 			if (exec.parent !== undefined) {
-				extras.set(extraKey(exec), `${THEN_RUN_SKIPPED} transport sub-dispatch; the command was not run.`);
-				return value;
+				return skip(`${THEN_RUN_SKIPPED} transport sub-dispatch; the command was not run.`);
 			}
 			if (!absolutePath) {
-				extras.set(extraKey(exec), `${THEN_RUN_SKIPPED} mutation path is unavailable; the command was not run.`);
-				return value;
+				return skip(`${THEN_RUN_SKIPPED} mutation path is unavailable; the command was not run.`);
 			}
 			try {
 				await assertUnchangedBeforeCommand(absolutePath);

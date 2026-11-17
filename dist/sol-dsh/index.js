@@ -212,6 +212,13 @@ function withoutThenRun(args) {
   const { then_run: _ignored, ...rest } = args;
   return rest;
 }
+function withSkipMarker(value, marker) {
+  if (typeof value === "string") return `${value}
+
+${marker}`;
+  if (value && typeof value === "object" && !Array.isArray(value)) return { ...value, then_run: marker };
+  return value;
+}
 function declaredProperties(parameters) {
   if (!parameters) return {};
   return parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties) ? parameters.properties : parameters;
@@ -297,13 +304,15 @@ ${base.description}`;
       };
       const value = absolutePath ? await withFusedFileQueue(absolutePath, work) : await work();
       if (!thenRun) return value;
+      const skip = (marker) => {
+        extras.set(extraKey(exec), marker);
+        return exec.parent !== void 0 ? withSkipMarker(value, marker) : value;
+      };
       if (exec.parent !== void 0) {
-        extras.set(extraKey(exec), `${THEN_RUN_SKIPPED} transport sub-dispatch; the command was not run.`);
-        return value;
+        return skip(`${THEN_RUN_SKIPPED} transport sub-dispatch; the command was not run.`);
       }
       if (!absolutePath) {
-        extras.set(extraKey(exec), `${THEN_RUN_SKIPPED} mutation path is unavailable; the command was not run.`);
-        return value;
+        return skip(`${THEN_RUN_SKIPPED} mutation path is unavailable; the command was not run.`);
       }
       try {
         await assertUnchangedBeforeCommand(absolutePath);

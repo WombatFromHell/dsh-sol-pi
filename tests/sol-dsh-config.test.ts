@@ -1004,6 +1004,49 @@ describe("sol-dsh DSH native seams", () => {
 		const value = await tool.execute(nested.arguments, nested);
 		expect(batches).toHaveLength(0);
 		expect(textOf(tool.finalizeContent!(nested as never, value as never))).toContain("[then_run:skipped]");
+		// Codemode hands the program `value`, never content blocks — the skip must be readable there.
+		expect((value as { then_run?: string }).then_run).toContain("[then_run:skipped]");
+	});
+
+	it("reports a skipped then_run on a string-output mutation under codemode", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "sol-dsh-fusion-string-"));
+		const filePath = join(dir, "b.txt");
+		writeFileSync(filePath, "x\n");
+		const base: ToolDefinition = {
+			name: "edit",
+			description: "Edit a file.",
+			parameters: { type: "object", properties: { path: { type: "string" } } },
+			output: { schema: { type: "string" }, render: () => [] },
+			async execute(): Promise<string> {
+				return "diff applied";
+			},
+		};
+		const fused: ToolDefinition[] = [];
+		const ctx = {
+			logger: { warn() {} },
+			tools: {
+				get: (name: string) => (name === "edit" ? base : undefined),
+				register: (definition: ToolDefinition) => {
+					fused.push(definition);
+					return () => {};
+				},
+			},
+		};
+		const agent = { id: "agent-2", ctx, session: { id: "session-2", header: { cwd: dir } } } as unknown as DshAgent;
+		attachActionFusion(ctx as never, agent, () => true);
+		const tool = fused[0]!;
+		const call = {
+			name: "edit",
+			arguments: { path: filePath, then_run: { command: "npm test" } },
+			callId: "call-9",
+			rootCallId: "call-9",
+			token: Symbol("t"),
+			signal: new AbortController().signal,
+			agent,
+			parent: Symbol("ptc"),
+		};
+		const value = await tool.execute(call.arguments, call);
+		expect(String(value)).toContain("[then_run:skipped]");
 	});
 
 	it("dispatches bash with the arguments the DSH tool schema requires", async () => {
